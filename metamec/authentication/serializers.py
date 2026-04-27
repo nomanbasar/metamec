@@ -22,8 +22,6 @@ class SignupSerializer(serializers.ModelSerializer):
         if not attrs.get("agreed_terms_business"):
             raise serializers.ValidationError({"agreed_terms_business": "You must agree to Terms of Business."})
 
-        if not attrs.get("agreed_privacy_policy"):
-            raise serializers.ValidationError({"agreed_privacy_policy": "You must agree to Privacy Policy."})
 
         return attrs
 

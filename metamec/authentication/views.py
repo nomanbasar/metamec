@@ -9,9 +9,11 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
-
+from django.db import transaction
+from .utils import build_response
 from .models import OTP, PasswordReset
 from .serializers import SignupSerializer, LoginSerializer
+from django.contrib.auth import authenticate
 
 User = get_user_model()
 
@@ -52,24 +54,32 @@ def get_tokens_for_user(user):
 class SignupView(APIView):
     permission_classes = [AllowAny]
 
+    @transaction.atomic
     def post(self, request):
         serializer = SignupSerializer(data=request.data)
 
-        if serializer.is_valid():
-            user = serializer.save()
-            otp = create_otp(user, "email_verification")
-
-            return Response(
-                {
-                    "message": "Account created successfully. Verification OTP sent.",
-                    "user_id": str(user.id),
-                    "email_address": user.email_address,
-                    "dev_otp": otp.otp_code,
-                },
-                status=status.HTTP_201_CREATED,
+        if not serializer.is_valid():
+            return build_response(
+                request,
+                success=False,
+                message="Validation error",
+                data=serializer.errors,
+                status_code=status.HTTP_400_BAD_REQUEST,
             )
 
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        user = serializer.save()
+        create_otp(user, "email_verification")
+
+        return build_response(
+            request,
+            success=True,
+            message="Signup successful. OTP sent to email.",
+            data={
+                "user_id": str(user.id),
+                "email_address": user.email_address,
+            },
+            status_code=status.HTTP_201_CREATED,
+        )
 
 
 class VerifyEmailView(APIView):
@@ -79,23 +89,51 @@ class VerifyEmailView(APIView):
         email_address = request.data.get("email_address")
         otp_code = request.data.get("otp_code")
 
+        if not email_address or not otp_code:
+            return build_response(
+                request,
+                success=False,
+                message="Email address and OTP code are required",
+                data={},
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
         try:
             user = User.objects.get(email_address=email_address)
         except User.DoesNotExist:
-            return Response({"error": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+            return build_response(
+                request,
+                success=False,
+                message="User not found",
+                data={},
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
 
         otp = OTP.objects.filter(
             user=user,
+            email_address=email_address,
             otp_code=otp_code,
             otp_type="email_verification",
             is_verified=False,
         ).order_by("-created_at").first()
 
         if not otp:
-            return Response({"error": "Invalid OTP."}, status=status.HTTP_400_BAD_REQUEST)
+            return build_response(
+                request,
+                success=False,
+                message="Invalid OTP",
+                data={},
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
 
         if otp.is_expired():
-            return Response({"error": "OTP expired."}, status=status.HTTP_400_BAD_REQUEST)
+            return build_response(
+                request,
+                success=False,
+                message="OTP expired",
+                data={},
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
 
         otp.is_verified = True
         otp.verified_at = timezone.now()
@@ -104,7 +142,17 @@ class VerifyEmailView(APIView):
         user.is_email_verified = True
         user.save()
 
-        return Response({"message": "Email verified successfully."}, status=status.HTTP_200_OK)
+        return build_response(
+            request,
+            success=True,
+            message="Email verified successfully",
+            data={
+                "user_id": user.id,
+                "email_address": user.email_address,
+                "is_email_verified": user.is_email_verified,
+            },
+            status_code=status.HTTP_200_OK,
+        )
 
 
 class ResendEmailOTPView(APIView):
@@ -136,37 +184,77 @@ class LoginView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        serializer = LoginSerializer(data=request.data, context={"request": request})
+        email_address = request.data.get("email_address")
+        password = request.data.get("password")
 
-        if serializer.is_valid():
-            user = serializer.validated_data["user"]
-
-            if not user.is_email_verified:
-                return Response(
-                    {"error": "Please verify your email before login."},
-                    status=status.HTTP_403_FORBIDDEN,
-                )
-
-            tokens = get_tokens_for_user(user)
-
-            return Response(
-                {
-                    "message": "Login successful.",
-                    "user": {
-                        "id": str(user.id),
-                        "full_name": user.full_name,
-                        "email_address": user.email_address,
-                        "phone_number": user.phone_number,
-                        "role": user.role,
-                        "is_admin": user.is_staff or user.is_superuser,
-                    },
-                    "tokens": tokens,
-                },
-                status=status.HTTP_200_OK,
+        if not email_address or not password:
+            return build_response(
+                request,
+                success=False,
+                message="Email and password are required",
+                data={},
+                status_code=status.HTTP_400_BAD_REQUEST,
             )
 
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        user = authenticate(
+            request=request,
+            username=email_address,
+            password=password,
+        )
 
+        if not user:
+            return build_response(
+                request,
+                success=False,
+                message="Invalid email or password",
+                data={},
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not user.is_active:
+            return build_response(
+                request,
+                success=False,
+                message="Account is inactive",
+                data={},
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+
+        if not user.is_email_verified:
+            return build_response(
+                request,
+                success=False,
+                message="Please verify your email first",
+                data={
+                    "is_email_verified": False
+                },
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+
+        # JWT token generate
+        refresh = RefreshToken.for_user(user)
+
+        return build_response(
+            request,
+            success=True,
+            message="Login successful",
+            data={
+                "user": {
+                    "user_id": user.id,
+                    "full_name": user.full_name,
+                    "email_address": user.email_address,
+                    "phone_number": user.phone_number,
+                    "role": user.role,
+                    "is_email_verified": user.is_email_verified,
+                    "is_admin": user.is_staff or user.is_superuser,
+                },
+                "tokens": {
+                    "access": str(refresh.access_token),
+                    "refresh": str(refresh),
+                },
+            },
+            status_code=status.HTTP_200_OK,
+        )
 
 class ForgotPasswordView(APIView):
     permission_classes = [AllowAny]
