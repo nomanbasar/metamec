@@ -14,6 +14,9 @@ from .utils import build_response
 from .models import OTP, PasswordReset
 from .serializers import SignupSerializer, LoginSerializer
 from django.contrib.auth import authenticate
+from .models import PasswordReset
+from .utils import build_response
+
 
 User = get_user_model()
 
@@ -299,12 +302,28 @@ class ForgotPasswordView(APIView):
     def post(self, request):
         email_address = request.data.get("email_address")
 
-        try:
-            user = User.objects.get(email_address=email_address)
-        except User.DoesNotExist:
-            return Response(
-                {"message": "If this email exists, reset OTP has been sent."},
-                status=status.HTTP_200_OK,
+        if not email_address:
+            return build_response(
+                request,
+                success=False,
+                message="Validation error",
+                data={
+                    "email_address": ["This field is required."]
+                },
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        email_address = email_address.lower()
+
+        user = User.objects.filter(email_address=email_address).first()
+
+        if not user:
+            return build_response(
+                request,
+                success=False,
+                message="User not found",
+                data={},
+                status_code=status.HTTP_404_NOT_FOUND,
             )
 
         otp = create_otp(user, "password_reset")
@@ -315,14 +334,16 @@ class ForgotPasswordView(APIView):
             expires_at=timezone.now() + timedelta(minutes=10),
         )
 
-        return Response(
-            {
-                "message": "Reset OTP sent.",
-                "dev_otp": otp.otp_code,
+        return build_response(
+            request,
+            success=True,
+            message="Password reset OTP sent successfully",
+            data={
+                "email_address": user.email_address,
+                "purpose": "password_reset",
             },
-            status=status.HTTP_200_OK,
+            status_code=status.HTTP_200_OK,
         )
-
 
 class VerifyPasswordResetOTPView(APIView):
     permission_classes = [AllowAny]
