@@ -291,8 +291,8 @@ class LoginView(APIView):
                     "is_admin": user.is_staff or user.is_superuser,
                 },
                 "tokens": {
-                    "access": str(refresh.access_token),
-                    "refresh": str(refresh),
+                    "accessToken": str(refresh.access_token),
+                    "refreshToken": str(refresh),
                 },
             },
             status_code=status.HTTP_200_OK,
