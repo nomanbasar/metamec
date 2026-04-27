@@ -354,26 +354,21 @@ class VerifyPasswordResetOTPView(APIView):
         email_address = request.data.get("email_address")
         otp_code = request.data.get("otp_code")
 
-        if not email_address:
-            return build_response(
-                request,
-                success=False,
-                message="Validation error",
-                data={
-                    "email_address": ["This field is required."]
-                },
-                status_code=status.HTTP_400_BAD_REQUEST,
-            )
+        errors = {}
 
+        if not email_address:
+            errors["email_address"] = ["This field is required."]
         if not otp_code:
-            return build_response(
-                request,
-                success=False,
-                message="Validation error",
-                data={
-                    "otp_code": ["This field is required."]
+            errors["otp_code"] = ["This field is required."]
+
+        if errors:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Validation error",
+                    "errors": errors,
                 },
-                status_code=status.HTTP_400_BAD_REQUEST,
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         email_address = email_address.lower()
@@ -381,12 +376,12 @@ class VerifyPasswordResetOTPView(APIView):
         user = User.objects.filter(email_address=email_address).first()
 
         if not user:
-            return build_response(
-                request,
-                success=False,
-                message="User not found",
-                data={},
-                status_code=status.HTTP_404_NOT_FOUND,
+            return Response(
+                {
+                    "success": False,
+                    "message": "User not found",
+                },
+                status=status.HTTP_404_NOT_FOUND,
             )
 
         otp = OTP.objects.filter(
@@ -398,90 +393,99 @@ class VerifyPasswordResetOTPView(APIView):
         ).order_by("-created_at").first()
 
         if not otp:
-            return build_response(
-                request,
-                success=False,
-                message="Invalid OTP",
-                data={},
-                status_code=status.HTTP_400_BAD_REQUEST,
+            return Response(
+                {
+                    "success": False,
+                    "message": "Invalid OTP",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         if otp.is_expired():
-            return build_response(
-                request,
-                success=False,
-                message="OTP expired",
-                data={},
-                status_code=status.HTTP_400_BAD_REQUEST,
+            return Response(
+                {
+                    "success": False,
+                    "message": "OTP expired",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         otp.is_verified = True
         otp.verified_at = timezone.now()
         otp.save()
 
-        return build_response(
-            request,
-            success=True,
-            message="OTP verified successfully",
-            data={
-                "email_address": user.email_address,
-                "purpose": "password_reset",
-                "is_otp_verified": True,
+        refresh = RefreshToken.for_user(user)
+
+        return Response(
+            {
+                "success": True,
+                "message": "OTP verified",
+                "accessToken": str(refresh.access_token),
+                "refreshToken": str(refresh),
+                "user": {
+                    "email": user.email_address,
+                    "full_name": user.full_name,
+                    "role": user.role,
+                },
             },
-            status_code=status.HTTP_200_OK,
+            status=status.HTTP_200_OK,
         )
 
 
 class ResetPasswordView(APIView):
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        email_address = request.data.get("email_address")
-        otp_code = request.data.get("otp_code")
+        user = request.user
+
         new_password = request.data.get("new_password")
         confirm_password = request.data.get("confirm_password")
 
+        errors = {}
+
+        if not new_password:
+            errors["new_password"] = ["This field is required."]
+        if not confirm_password:
+            errors["confirm_password"] = ["This field is required."]
+
+        if errors:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Validation error",
+                    "errors": errors,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         if new_password != confirm_password:
-            return Response({"error": "Passwords do not match."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {
+                    "success": False,
+                    "message": "Passwords do not match",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        if not new_password or len(new_password) < 8:
-            return Response({"error": "Password must be at least 8 characters."}, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            user = User.objects.get(email_address=email_address)
-        except User.DoesNotExist:
-            return Response({"error": "User not found."}, status=status.HTTP_404_NOT_FOUND)
-
-        otp = OTP.objects.filter(
-            user=user,
-            otp_code=otp_code,
-            otp_type="password_reset",
-            is_verified=True,
-        ).order_by("-created_at").first()
-
-        if not otp:
-            return Response({"error": "OTP verification required."}, status=status.HTTP_400_BAD_REQUEST)
-
-        password_reset = PasswordReset.objects.filter(
-            user=user,
-            otp=otp,
-            is_used=False,
-        ).order_by("-created_at").first()
-
-        if not password_reset:
-            return Response({"error": "Invalid reset request."}, status=status.HTTP_400_BAD_REQUEST)
-
-        if password_reset.is_expired():
-            return Response({"error": "Reset request expired."}, status=status.HTTP_400_BAD_REQUEST)
+        if len(new_password) < 8:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Password must be at least 8 characters",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         user.set_password(new_password)
         user.save()
 
-        password_reset.is_used = True
-        password_reset.used_at = timezone.now()
-        password_reset.save()
-
-        return Response({"message": "Password reset successful."}, status=status.HTTP_200_OK)
+        return Response(
+            {
+                "success": True,
+                "message": "Password reset successful",
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class MeView(APIView):
