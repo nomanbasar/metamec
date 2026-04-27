@@ -16,6 +16,8 @@ from .serializers import SignupSerializer, LoginSerializer
 from django.contrib.auth import authenticate
 from .models import PasswordReset
 from .utils import build_response
+from .models import OTP
+from .utils import build_response
 
 
 User = get_user_model()
@@ -352,29 +354,82 @@ class VerifyPasswordResetOTPView(APIView):
         email_address = request.data.get("email_address")
         otp_code = request.data.get("otp_code")
 
-        try:
-            user = User.objects.get(email_address=email_address)
-        except User.DoesNotExist:
-            return Response({"error": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+        if not email_address:
+            return build_response(
+                request,
+                success=False,
+                message="Validation error",
+                data={
+                    "email_address": ["This field is required."]
+                },
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not otp_code:
+            return build_response(
+                request,
+                success=False,
+                message="Validation error",
+                data={
+                    "otp_code": ["This field is required."]
+                },
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        email_address = email_address.lower()
+
+        user = User.objects.filter(email_address=email_address).first()
+
+        if not user:
+            return build_response(
+                request,
+                success=False,
+                message="User not found",
+                data={},
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
 
         otp = OTP.objects.filter(
             user=user,
+            email_address=email_address,
             otp_code=otp_code,
             otp_type="password_reset",
             is_verified=False,
         ).order_by("-created_at").first()
 
         if not otp:
-            return Response({"error": "Invalid OTP."}, status=status.HTTP_400_BAD_REQUEST)
+            return build_response(
+                request,
+                success=False,
+                message="Invalid OTP",
+                data={},
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
 
         if otp.is_expired():
-            return Response({"error": "OTP expired."}, status=status.HTTP_400_BAD_REQUEST)
+            return build_response(
+                request,
+                success=False,
+                message="OTP expired",
+                data={},
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
 
         otp.is_verified = True
         otp.verified_at = timezone.now()
         otp.save()
 
-        return Response({"message": "OTP verified. You can reset password now."}, status=status.HTTP_200_OK)
+        return build_response(
+            request,
+            success=True,
+            message="OTP verified successfully",
+            data={
+                "email_address": user.email_address,
+                "purpose": "password_reset",
+                "is_otp_verified": True,
+            },
+            status_code=status.HTTP_200_OK,
+        )
 
 
 class ResetPasswordView(APIView):
