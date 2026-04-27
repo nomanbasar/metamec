@@ -506,3 +506,64 @@ class MeView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+    
+
+class ResendForgotPasswordOTPView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        email_address = request.data.get("email_address")
+
+        if not email_address:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Validation error",
+                    "errors": {
+                        "email_address": ["This field is required."]
+                    },
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        email_address = email_address.lower()
+
+        user = User.objects.filter(email_address=email_address).first()
+
+        if not user:
+            return Response(
+                {
+                    "success": False,
+                    "message": "User not found",
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        last_otp = OTP.objects.filter(
+            user=user,
+            otp_type="password_reset",
+        ).order_by("-created_at").first()
+
+        resend_count = last_otp.resend_count if last_otp else 0
+
+        otp = create_otp(user, "password_reset")
+        otp.resend_count = resend_count + 1
+        otp.save(update_fields=["resend_count"])
+
+        PasswordReset.objects.create(
+            user=user,
+            otp=otp,
+            expires_at=timezone.now() + timedelta(minutes=10),
+        )
+
+        return Response(
+            {
+                "success": True,
+                "message": "OTP resent successfully",
+                "data": {
+                    "email_address": user.email_address,
+                    "purpose": "password_reset",
+                },
+            },
+            status=status.HTTP_200_OK,
+        )
