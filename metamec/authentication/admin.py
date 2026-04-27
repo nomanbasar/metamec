@@ -7,6 +7,7 @@ from .models import User, OTP, PasswordReset
 class UserAdmin(BaseUserAdmin):
     ordering = ("-created_at",)
     list_display = (
+        "id",
         "email_address",
         "full_name",
         "phone_number",
@@ -49,12 +50,12 @@ class UserAdmin(BaseUserAdmin):
 
 @admin.register(OTP)
 class OTPAdmin(admin.ModelAdmin):
-    list_display = ("email_address", "otp_code", "otp_type", "is_verified", "expires_at", "created_at")
+    list_display = ("id","email_address", "otp_code", "otp_type", "is_verified", "expires_at", "created_at")
     search_fields = ("email_address", "otp_code")
     list_filter = ("otp_type", "is_verified")
 
 
 @admin.register(PasswordReset)
 class PasswordResetAdmin(admin.ModelAdmin):
-    list_display = ("user", "is_used", "expires_at", "used_at", "created_at")
+    list_display = ("id","user", "is_used", "expires_at", "used_at", "created_at")
     list_filter = ("is_used",)

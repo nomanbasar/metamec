@@ -161,22 +161,59 @@ class ResendEmailOTPView(APIView):
     def post(self, request):
         email_address = request.data.get("email_address")
 
-        try:
-            user = User.objects.get(email_address=email_address)
-        except User.DoesNotExist:
-            return Response({"error": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+        if not email_address:
+            return build_response(
+                request,
+                success=False,
+                message="Validation error",
+                data={
+                    "email_address": ["This field is required."]
+                },
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        email_address = email_address.lower()
+        purpose = "email_verify"
+
+        user = User.objects.filter(email_address=email_address).first()
+        if not user:
+            return build_response(
+                request,
+                success=False,
+                message="User not found",
+                data={},
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
 
         if user.is_email_verified:
-            return Response({"message": "Email already verified."}, status=status.HTTP_200_OK)
+            return build_response(
+                request,
+                success=False,
+                message="Email already verified",
+                data={},
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        last_otp = OTP.objects.filter(
+            user=user,
+            otp_type="email_verification",
+        ).order_by("-created_at").first()
+
+        resend_count = last_otp.resend_count if last_otp else 0
 
         otp = create_otp(user, "email_verification")
+        otp.resend_count = resend_count + 1
+        otp.save(update_fields=["resend_count"])
 
-        return Response(
-            {
-                "message": "New OTP sent.",
-                "dev_otp": otp.otp_code,
+        return build_response(
+            request,
+            success=True,
+            message="OTP resent successfully",
+            data={
+                "email_address": user.email_address,
+                "purpose": purpose,
             },
-            status=status.HTTP_200_OK,
+            status_code=status.HTTP_200_OK,
         )
 
 

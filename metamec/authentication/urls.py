@@ -13,7 +13,7 @@ from .views import (
 urlpatterns = [
     path("signup/", SignupView.as_view(), name="signup"),
     path("verify-email/", VerifyEmailView.as_view(), name="verify_email"),
-    path("resend-email-otp/", ResendEmailOTPView.as_view(), name="resend_email_otp"),
+    path("resend-signup-otp/", ResendEmailOTPView.as_view(), name="resend_signup_otp"),
 
     path("login/", LoginView.as_view(), name="login"),
     path("me/", MeView.as_view(), name="me"),
