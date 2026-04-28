@@ -379,13 +379,12 @@ class VerifyPasswordResetOTPView(APIView):
             errors["otp_code"] = ["This field is required."]
 
         if errors:
-            return Response(
-                {
-                    "success": False,
-                    "message": "Validation error",
-                    "errors": errors,
-                },
-                status=status.HTTP_400_BAD_REQUEST,
+            return build_response(
+                request,
+                success=False,
+                message="Validation error",
+                data=errors,
+                status_code=status.HTTP_400_BAD_REQUEST,
             )
 
         email_address = email_address.lower()
@@ -393,12 +392,12 @@ class VerifyPasswordResetOTPView(APIView):
         user = User.objects.filter(email_address=email_address).first()
 
         if not user:
-            return Response(
-                {
-                    "success": False,
-                    "message": "User not found",
-                },
-                status=status.HTTP_404_NOT_FOUND,
+            return build_response(
+                request,
+                success=False,
+                message="User not found",
+                data={},
+                status_code=status.HTTP_404_NOT_FOUND,
             )
 
         otp = OTP.objects.filter(
@@ -410,30 +409,30 @@ class VerifyPasswordResetOTPView(APIView):
         ).order_by("-created_at").first()
 
         if not otp:
-            return Response(
-                {
-                    "success": False,
-                    "message": "Invalid OTP",
-                },
-                status=status.HTTP_400_BAD_REQUEST,
+            return build_response(
+                request,
+                success=False,
+                message="Invalid OTP",
+                data={},
+                status_code=status.HTTP_400_BAD_REQUEST,
             )
 
         if otp.attempt_count >= settings.OTP_MAX_ATTEMPTS:
-            return Response(
-                {
-                    "success": False,
-                    "message": "Maximum OTP attempt limit reached",
-                },
-                status=status.HTTP_400_BAD_REQUEST,
+            return build_response(
+                request,
+                success=False,
+                message="Maximum OTP attempt limit reached",
+                data={},
+                status_code=status.HTTP_400_BAD_REQUEST,
             )
 
         if otp.is_expired():
-            return Response(
-                {
-                    "success": False,
-                    "message": "OTP expired",
-                },
-                status=status.HTTP_400_BAD_REQUEST,
+            return build_response(
+                request,
+                success=False,
+                message="OTP expired",
+                data={},
+                status_code=status.HTTP_400_BAD_REQUEST,
             )
 
         otp.is_verified = True
@@ -442,10 +441,11 @@ class VerifyPasswordResetOTPView(APIView):
 
         refresh = RefreshToken.for_user(user)
 
-        return Response(
-            {
-                "success": True,
-                "message": "OTP verified",
+        return build_response(
+            request,
+            success=True,
+            message="OTP verified",
+            data={
                 "accessToken": str(refresh.access_token),
                 "refreshToken": str(refresh),
                 "user": {
@@ -454,10 +454,10 @@ class VerifyPasswordResetOTPView(APIView):
                     "role": user.role,
                 },
             },
-            status=status.HTTP_200_OK,
+            status_code=status.HTTP_200_OK,
         )
-
-
+    
+    
 class ResetPasswordView(APIView):
     permission_classes = [IsAuthenticated]
 
