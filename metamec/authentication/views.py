@@ -18,7 +18,7 @@ from .models import PasswordReset
 from .utils import build_response
 from .models import OTP
 from .utils import build_response
-
+from django.conf import settings
 
 User = get_user_model()
 
@@ -33,7 +33,7 @@ def create_otp(user, otp_type):
         email_address=user.email_address,
         otp_code=generate_otp(),
         otp_type=otp_type,
-        expires_at=timezone.now() + timedelta(minutes=10),
+        expires_at=timezone.now() + timedelta(minutes=settings.OTP_EXPIRE_MINUTES),
     )
 
     send_mail(
@@ -130,6 +130,15 @@ class VerifyEmailView(APIView):
                 data={},
                 status_code=status.HTTP_400_BAD_REQUEST,
             )
+        
+        if otp.attempt_count >= settings.OTP_MAX_ATTEMPTS:
+            return build_response(
+                request,
+                success=False,
+                message="Maximum OTP attempt limit reached",
+                data={},
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
 
         if otp.is_expired():
             return build_response(
@@ -204,6 +213,15 @@ class ResendEmailOTPView(APIView):
             otp_type="email_verification",
         ).order_by("-created_at").first()
 
+        if last_otp and last_otp.resend_count >= settings.OTP_MAX_RESEND:
+            return build_response(
+                request,
+                success=False,
+                message="Maximum OTP resend limit reached",
+                data={},
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
         resend_count = last_otp.resend_count if last_otp else 0
 
         otp = create_otp(user, "email_verification")
@@ -220,7 +238,6 @@ class ResendEmailOTPView(APIView):
             },
             status_code=status.HTTP_200_OK,
         )
-
 
 class LoginView(APIView):
     permission_classes = [AllowAny]
@@ -333,7 +350,7 @@ class ForgotPasswordView(APIView):
         PasswordReset.objects.create(
             user=user,
             otp=otp,
-            expires_at=timezone.now() + timedelta(minutes=10),
+            expires_at=timezone.now() + timedelta(minutes=settings.PASSWORD_RESET_TOKEN_EXPIRE_MINUTES),
         )
 
         return build_response(
@@ -397,6 +414,15 @@ class VerifyPasswordResetOTPView(APIView):
                 {
                     "success": False,
                     "message": "Invalid OTP",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if otp.attempt_count >= settings.OTP_MAX_ATTEMPTS:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Maximum OTP attempt limit reached",
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
@@ -494,17 +520,22 @@ class MeView(APIView):
     def get(self, request):
         user = request.user
 
-        return Response(
-            {
-                "id": str(user.id),
+        return build_response(
+            request,
+            success=True,
+            message="User profile fetched successfully",
+            data={
+                "id": user.id,
                 "full_name": user.full_name,
                 "email_address": user.email_address,
                 "phone_number": user.phone_number,
                 "role": user.role,
                 "is_email_verified": user.is_email_verified,
-                "is_admin": user.is_staff or user.is_superuser,
+                "is_active": user.is_active,
+                "is_staff": user.is_staff,
+                "is_superuser": user.is_superuser,
             },
-            status=status.HTTP_200_OK,
+            status_code=status.HTTP_200_OK,
         )
     
 
@@ -544,6 +575,15 @@ class ResendForgotPasswordOTPView(APIView):
             otp_type="password_reset",
         ).order_by("-created_at").first()
 
+        if last_otp and last_otp.resend_count >= settings.OTP_MAX_RESEND:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Maximum OTP resend limit reached",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         resend_count = last_otp.resend_count if last_otp else 0
 
         otp = create_otp(user, "password_reset")
@@ -553,7 +593,7 @@ class ResendForgotPasswordOTPView(APIView):
         PasswordReset.objects.create(
             user=user,
             otp=otp,
-            expires_at=timezone.now() + timedelta(minutes=10),
+            expires_at=timezone.now() + timedelta(minutes=settings.PASSWORD_RESET_TOKEN_EXPIRE_MINUTES),
         )
 
         return Response(

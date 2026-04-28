@@ -11,7 +11,7 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
 from pathlib import Path
-
+from datetime import timedelta
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -141,3 +141,14 @@ EMAIL_PORT = 587
 EMAIL_HOST_USER = "abunomanbasarjvai@gmail.com"
 EMAIL_HOST_PASSWORD = "mblv sdke scmf icmn"
 DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
+
+
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=3000),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
+}
+
+OTP_EXPIRE_MINUTES = 50
+OTP_MAX_ATTEMPTS = 100
+OTP_MAX_RESEND = 40
+PASSWORD_RESET_TOKEN_EXPIRE_MINUTES = 100
