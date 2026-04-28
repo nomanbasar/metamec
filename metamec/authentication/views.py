@@ -20,6 +20,9 @@ from .models import OTP
 from .utils import build_response
 from django.conf import settings
 
+from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework.permissions import IsAuthenticated
+
 User = get_user_model()
 
 
@@ -607,3 +610,42 @@ class ResendForgotPasswordOTPView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+class LogoutView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        refresh_token = request.data.get("refreshToken")
+
+        if not refresh_token:
+            return build_response(
+                request,
+                success=False,
+                message="Validation error",
+                data={
+                    "refreshToken": ["This field is required."]
+                },
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            token = RefreshToken(refresh_token)
+            token.blacklist()
+
+            return build_response(
+                request,
+                success=True,
+                message="Logout successful",
+                data={},
+                status_code=status.HTTP_200_OK,
+            )
+
+        except Exception:
+            return build_response(
+                request,
+                success=False,
+                message="Invalid or expired refresh token",
+                data={},
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
