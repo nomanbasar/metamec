@@ -2,57 +2,79 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*.pyo
+*.pyd
+.Python
 
-# Django
-*.log
-local_settings.py
-db.sqlite3
-media/
-
-# Environment variables
-.env
-.env.*
-*.env
-
-# Virtual environment
+# Virtual Environment
 env/
 venv/
 ENV/
 env.bak/
 venv.bak/
+.venv/
+
+# Environment Variables
+.env
+.env.*
+*.env
+!.env.example
+
+# Django
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+media/
+
+
+
+# Static files
+staticfiles/
+static_root/
+
+# PyCharm / JetBrains
+.idea/
+*.iml
+*.iws
+*.ipr
+.idea/workspace.xml
+.idea/tasks.xml
+.idea/shelf/
 
 # VS Code
 .vscode/
 
-# PyCharm
-.idea/
-
-# Mac
+# macOS
 .DS_Store
+.AppleDouble
+.LSOverride
 
 # Windows
 Thumbs.db
+ehthumbs.db
+Desktop.ini
 
-# Static files (optional if you collectstatic)
-staticfiles/
+# Pytest
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
 
-# Migrations (optional - normally keep, but if needed ignore)
-# */migrations/*
-# !*/migrations/__init__.py
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
 
-# Coverage / testing
+# Coverage / Testing
 .coverage
 htmlcov/
 .tox/
 .pytest_cache/
+coverage.xml
 
-# Node (if frontend later)
+# Node (future frontend)
 node_modules/
-dist/
-build/
-
-# Logs
-*.log
 
 # Secrets
 *.pem
