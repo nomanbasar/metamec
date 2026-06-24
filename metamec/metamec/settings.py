@@ -43,6 +43,8 @@ INSTALLED_APPS = [
     'corsheaders',
     'authentication',
     'rest_framework_simplejwt.token_blacklist',
+
+    'loan_management',
 ]
 
 MIDDLEWARE = [
@@ -123,6 +125,8 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 
+MEDIA_URL = "/media/"
+MEDIA_ROOT = BASE_DIR / "media"
 
 AUTH_USER_MODEL = 'authentication.User'
 
@@ -153,3 +157,4 @@ OTP_EXPIRE_MINUTES = 50
 OTP_MAX_ATTEMPTS = 100
 OTP_MAX_RESEND = 40
 PASSWORD_RESET_TOKEN_EXPIRE_MINUTES = 100
+
