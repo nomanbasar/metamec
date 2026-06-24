@@ -71,28 +71,83 @@ class LoanManagementSummaryView(APIView):
         inactive_loan_types = LoanType.objects.filter(is_active=False).count()
 
         total_templates = LoanTemplate.objects.count()
-        published_templates = LoanTemplate.objects.filter(status=LoanTemplate.STATUS_PUBLISHED).count()
-        draft_templates = LoanTemplate.objects.filter(status=LoanTemplate.STATUS_DRAFT).count()
+        published_templates = LoanTemplate.objects.filter(
+            status=LoanTemplate.STATUS_PUBLISHED
+        ).count()
+        draft_templates = LoanTemplate.objects.filter(
+            status=LoanTemplate.STATUS_DRAFT
+        ).count()
 
         total_sections = LoanTemplateSection.objects.count()
 
-        avg_sections = Decimal("0.0")
-        if total_templates:
-            avg_sections = Decimal(total_sections) / Decimal(total_templates)
+        average_sections = 0.0
+        if total_templates > 0:
+            average_sections = round(total_sections / total_templates, 1)
+
+        loan_types_queryset = LoanType.objects.select_related("template").all().order_by("name")
+
+        data = {
+            # 1 number marked section: top summary cards
+            "summaryCards": [
+                {
+                    "key": "totalLoanTypes",
+                    "title": "Total Loan Types",
+                    "value": total_loan_types,
+                    "subtitle": f"{active_loan_types} active, {inactive_loan_types} inactive"
+                },
+                {
+                    "key": "totalTemplates",
+                    "title": "Total Templates",
+                    "value": total_templates,
+                    "subtitle": f"{published_templates} published, {draft_templates} draft"
+                },
+                {
+                    "key": "averageSectionsPerTemplate",
+                    "title": "Avg. Sections per Template",
+                    "value": average_sections,
+                    "subtitle": "Based on all templates"
+                }
+            ],
+
+            # 2 number marked section: Loan Types / Loan Templates boxes
+            "managementCards": [
+                {
+                    "key": "loanTypes",
+                    "title": "Loan Types",
+                    "description": "Manage available loan types and their configurations",
+                    "metricTitle": "Active Types",
+                    "metricValue": total_loan_types,
+                    "api": "/api/admin/loan-types/"
+                },
+                {
+                    "key": "loanTemplates",
+                    "title": "Loan Templates",
+                    "description": "Create and manage loan agreement templates",
+                    "metricTitle": "Templates",
+                    "metricValue": total_templates,
+                    "api": "/api/admin/loan-templates/"
+                }
+            ],
+
+            # 3 number marked section: bottom loan type cards
+            "loanTypes": LoanTypeSerializer(loan_types_queryset, many=True).data,
+
+            # 
+            "totalLoanTypes": total_loan_types,
+            "activeLoanTypes": active_loan_types,
+            "inactiveLoanTypes": inactive_loan_types,
+            "totalTemplates": total_templates,
+            "publishedTemplates": published_templates,
+            "draftTemplates": draft_templates,
+            "averageSectionsPerTemplate": average_sections
+        }
 
         return build_response(
             request,
             success=True,
             message="Loan management summary fetched successfully",
-            data={
-                "totalLoanTypes": total_loan_types,
-                "activeLoanTypes": active_loan_types,
-                "inactiveLoanTypes": inactive_loan_types,
-                "totalTemplates": total_templates,
-                "publishedTemplates": published_templates,
-                "draftTemplates": draft_templates,
-                "averageSectionsPerTemplate": float(round(avg_sections, 1)),
-            },
+            meta={},
+            data=data,
             status_code=status.HTTP_200_OK,
         )
 
