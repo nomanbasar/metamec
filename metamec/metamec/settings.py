@@ -45,6 +45,7 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt.token_blacklist',
 
     'loan_management',
+    'loan_applications',
 ]
 
 MIDDLEWARE = [
