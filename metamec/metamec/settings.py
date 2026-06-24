@@ -47,6 +47,7 @@ INSTALLED_APPS = [
     'loan_management',
     'loan_applications',
     'loan_documents',
+    'admin_review',
 ]
 
 MIDDLEWARE = [
