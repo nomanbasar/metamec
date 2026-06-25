@@ -49,6 +49,7 @@ INSTALLED_APPS = [
     'loan_documents',
     'admin_review',
     'kyc_verification',
+    'loan_agreements',
 
 ]
 
@@ -167,3 +168,6 @@ PASSWORD_RESET_TOKEN_EXPIRE_MINUTES = 100
 KYC_PROVIDER = config("KYC_PROVIDER", default="mock")
 ONFIDO_API_TOKEN = config("ONFIDO_API_TOKEN", default="")
 ONFIDO_WEBHOOK_SECRET = config("ONFIDO_WEBHOOK_SECRET", default="")
+
+
+SITE_BASE_URL = config("SITE_BASE_URL", default="http://127.0.0.1:8010")
