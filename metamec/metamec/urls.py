@@ -26,6 +26,7 @@ urlpatterns = [
     path("api/", include("loan_applications.urls")),
     path("api/", include("loan_documents.urls")),
     path("api/", include("admin_review.urls")),
+    path("api/", include("kyc_verification.urls")),
 ]
 if settings.DEBUG:
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
