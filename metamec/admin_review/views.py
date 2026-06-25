@@ -1,7 +1,8 @@
 import math
 from decimal import Decimal, ROUND_HALF_UP
 
-from django.db.models import Q
+from django.db.models import Q, Count
+from django.contrib.auth import get_user_model
 from django.utils import timezone
 
 from rest_framework import status
@@ -982,3 +983,502 @@ class AdminApplicationTimelineView(APIView):
             data=data,
             status_code=status.HTTP_200_OK,
         )
+    
+
+def _get_user_created_at(user):
+    return getattr(user, "created_at", None) or getattr(user, "date_joined", None)
+
+
+def _format_joined_month_year(value):
+    if not value:
+        return ""
+    return value.strftime("%b %Y")
+
+
+def _format_member_since(value):
+    if not value:
+        return ""
+    return value.strftime("%b %d, %Y")
+
+
+def _get_admin_user_role(user):
+    if getattr(user, "is_superuser", False) or getattr(user, "is_staff", False):
+        return "admin"
+    return getattr(user, "role", "customer") or "customer"
+
+
+def _get_admin_user_role_label(user):
+    role = _get_admin_user_role(user)
+    mapping = {
+        "admin": "admin",
+        "customer": "customer",
+        "joint_customer": "joint customer",
+    }
+    return mapping.get(role, role.replace("_", " "))
+
+
+def _get_user_status(user):
+    return "active" if getattr(user, "is_active", False) else "suspended"
+
+
+def _get_latest_user_application(user):
+    return (
+        LoanApplication.objects
+        .filter(user=user)
+        .select_related("loan_type")
+        .order_by("-created_at")
+        .first()
+    )
+
+
+def _employment_display(value):
+    mapping = {
+        LoanApplication.EMPLOYMENT_EMPLOYED: "Full Time",
+        LoanApplication.EMPLOYMENT_SELF_EMPLOYED: "Self-employed",
+        LoanApplication.EMPLOYMENT_OTHER: "Other",
+    }
+    return mapping.get(value, value or None)
+
+
+def _build_admin_user_card(user):
+    applications_count = getattr(user, "applications_count", None)
+    if applications_count is None:
+        applications_count = LoanApplication.objects.filter(user=user).count()
+
+    latest_application = _get_latest_user_application(user)
+
+    
+    credit_score = getattr(user, "credit_score", None)
+
+    return {
+        "id": user.id,
+        "fullName": _get_user_full_name(user),
+        "email": _get_user_email(user),
+        "phone": _get_user_phone(user),
+        "initials": _get_user_initials(user),
+
+        "role": _get_admin_user_role(user),
+        "roleLabel": _get_admin_user_role_label(user),
+
+        "status": _get_user_status(user),
+        "statusLabel": "active" if getattr(user, "is_active", False) else "suspended",
+
+        "applicationsCount": applications_count,
+
+        "creditScore": credit_score,
+        "creditScoreDisplay": credit_score if credit_score is not None else "—",
+
+        "annualIncome": _money(latest_application.annual_income) if latest_application else None,
+        "annualIncomeDisplay": _money_display(latest_application.annual_income) if latest_application else "—",
+
+        "employment": latest_application.employment_type if latest_application else None,
+        "employmentDisplay": _employment_display(latest_application.employment_type) if latest_application else "—",
+
+        "joined": _format_joined_month_year(_get_user_created_at(user)),
+        "memberSince": _format_member_since(_get_user_created_at(user)),
+        "createdAt": _get_user_created_at(user),
+
+        "actions": {
+            "canView": True,
+            "canSuspend": bool(getattr(user, "is_active", False)),
+            "canActivate": not bool(getattr(user, "is_active", False)),
+            "detailApi": f"/api/admin/users/{user.id}/",
+            "activityApi": f"/api/admin/users/{user.id}/activity/",
+        },
+    }
+
+
+def _build_admin_user_detail(user):
+    latest_application = _get_latest_user_application(user)
+    card = _build_admin_user_card(user)
+
+    return {
+        **card,
+
+        "drawer": {
+            "title": _get_user_full_name(user),
+            "subtitle": _get_user_email(user),
+        },
+
+        "stats": {
+            "applications": card["applicationsCount"],
+            "creditScore": card["creditScore"],
+            "creditScoreDisplay": card["creditScoreDisplay"],
+            "annualIncome": card["annualIncome"],
+            "annualIncomeDisplay": card["annualIncomeDisplay"],
+            "memberSince": card["memberSince"],
+        },
+
+        "profile": {
+            "phone": _get_user_phone(user),
+            "employer": getattr(user, "employer", None) or "—",
+            "address": getattr(user, "address", None) or "—",
+            "employment": latest_application.employment_type if latest_application else None,
+            "employmentDisplay": _employment_display(latest_application.employment_type) if latest_application else "—",
+        },
+
+        "latestApplication": {
+            "id": latest_application.id,
+            "applicationNumber": latest_application.application_number,
+            "loanType": latest_application.loan_type.name if latest_application.loan_type else None,
+            "amount": _money(latest_application.loan_amount),
+            "amountDisplay": _money_display(latest_application.loan_amount),
+            "status": latest_application.status,
+            "statusLabel": _get_status_label(latest_application.status),
+        } if latest_application else None,
+    }
+
+
+def _build_user_activity_item(key, title, description, actor, activity_type, date):
+    return {
+        "key": key,
+        "title": title,
+        "description": description,
+        "actor": actor,
+        "type": activity_type,
+        "date": date,
+    }
+
+
+class AdminUsersListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not _is_admin_user(request.user):
+            return _admin_required_response(request)
+
+        User = get_user_model()
+
+        search = request.query_params.get("search", "").strip()
+        role_filter = request.query_params.get("role", "").strip().lower()
+        status_filter = request.query_params.get("status", "").strip().lower()
+
+        page = _to_int(request.query_params.get("page"), 1)
+        limit = _to_int(request.query_params.get("limit"), 8)
+
+        sort_by = request.query_params.get("sort_by", "joined").strip().lower()
+        order = request.query_params.get("order", "desc").strip().lower()
+
+        queryset = User.objects.annotate(
+            applications_count=Count("loan_applications", distinct=True)
+        )
+
+        if search:
+            queryset = queryset.filter(
+                Q(full_name__icontains=search) |
+                Q(email_address__icontains=search) |
+                Q(phone_number__icontains=search)
+            )
+
+        if role_filter == "admin":
+            queryset = queryset.filter(
+                Q(role="admin") | Q(is_staff=True) | Q(is_superuser=True)
+            )
+        elif role_filter == "customer":
+            queryset = queryset.filter(
+                role="customer",
+                is_staff=False,
+                is_superuser=False,
+            )
+
+        if status_filter == "active":
+            queryset = queryset.filter(is_active=True)
+        elif status_filter in ["suspended", "inactive", "disabled"]:
+            queryset = queryset.filter(is_active=False)
+
+        sort_map = {
+            "name": "full_name",
+            "joined": "created_at",
+            "created_at": "created_at",
+            "applications": "applications_count",
+            "status": "is_active",
+        }
+
+        sort_field = sort_map.get(sort_by, "created_at")
+
+        if order == "desc":
+            sort_field = f"-{sort_field}"
+
+        queryset = queryset.order_by(sort_field)
+
+        total = queryset.count()
+        start = (page - 1) * limit
+        end = start + limit
+        users = queryset[start:end]
+
+        total_users = User.objects.count()
+        total_customers = User.objects.filter(
+            role="customer",
+            is_staff=False,
+            is_superuser=False,
+        ).count()
+        total_admins = User.objects.filter(
+            Q(role="admin") | Q(is_staff=True) | Q(is_superuser=True)
+        ).distinct().count()
+        active_users = User.objects.filter(is_active=True).count()
+        suspended_users = User.objects.filter(is_active=False).count()
+
+        summary_cards = [
+            {
+                "key": "totalUsers",
+                "title": "Total Users",
+                "value": total_users,
+                "subtitle": "users in the system",
+            },
+            {
+                "key": "customers",
+                "title": "Customers",
+                "value": total_customers,
+                "subtitle": "customer accounts",
+            },
+            {
+                "key": "administrators",
+                "title": "Administrators",
+                "value": total_admins,
+                "subtitle": "admin accounts",
+            },
+        ]
+
+        meta = _build_meta(
+            page=page,
+            limit=limit,
+            total=total,
+            filters={
+                "search": search,
+                "role": role_filter,
+                "status": status_filter,
+            },
+            sorting={
+                "sort_by": sort_by,
+                "order": order,
+            },
+            summary={
+                "totalUsers": total_users,
+                "customers": total_customers,
+                "administrators": total_admins,
+                "activeUsers": active_users,
+                "suspendedUsers": suspended_users,
+            },
+        )
+
+        return build_response(
+            request,
+            success=True,
+            message="Admin users fetched successfully",
+            meta=meta,
+            data={
+                "summaryCards": summary_cards,
+                "users": [_build_admin_user_card(user) for user in users],
+            },
+            status_code=status.HTTP_200_OK,
+        )
+
+
+class AdminUserDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, user_id):
+        if not _is_admin_user(request.user):
+            return _admin_required_response(request)
+
+        User = get_user_model()
+        user_obj = User.objects.filter(id=user_id).first()
+
+        if not user_obj:
+            return build_response(
+                request,
+                success=False,
+                message="User not found",
+                data={},
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+
+        return build_response(
+            request,
+            success=True,
+            message="Admin user detail fetched successfully",
+            data=_build_admin_user_detail(user_obj),
+            status_code=status.HTTP_200_OK,
+        )
+
+
+class AdminUserSuspendView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, user_id):
+        if not _is_admin_user(request.user):
+            return _admin_required_response(request)
+
+        User = get_user_model()
+        user_obj = User.objects.filter(id=user_id).first()
+
+        if not user_obj:
+            return build_response(
+                request,
+                success=False,
+                message="User not found",
+                data={},
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+
+        if user_obj.id == request.user.id:
+            return build_response(
+                request,
+                success=False,
+                message="You cannot suspend your own account",
+                data={},
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user_obj.is_active = False
+
+        if hasattr(user_obj, "updated_at"):
+            user_obj.save(update_fields=["is_active", "updated_at"])
+        else:
+            user_obj.save(update_fields=["is_active"])
+
+        return build_response(
+            request,
+            success=True,
+            message="User suspended successfully",
+            data=_build_admin_user_detail(user_obj),
+            status_code=status.HTTP_200_OK,
+        )
+
+
+class AdminUserActivateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, user_id):
+        if not _is_admin_user(request.user):
+            return _admin_required_response(request)
+
+        User = get_user_model()
+        user_obj = User.objects.filter(id=user_id).first()
+
+        if not user_obj:
+            return build_response(
+                request,
+                success=False,
+                message="User not found",
+                data={},
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+
+        user_obj.is_active = True
+
+        if hasattr(user_obj, "updated_at"):
+            user_obj.save(update_fields=["is_active", "updated_at"])
+        else:
+            user_obj.save(update_fields=["is_active"])
+
+        return build_response(
+            request,
+            success=True,
+            message="User activated successfully",
+            data=_build_admin_user_detail(user_obj),
+            status_code=status.HTTP_200_OK,
+        )
+
+
+class AdminUserActivityView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, user_id):
+        if not _is_admin_user(request.user):
+            return _admin_required_response(request)
+
+        User = get_user_model()
+        user_obj = User.objects.filter(id=user_id).first()
+
+        if not user_obj:
+            return build_response(
+                request,
+                success=False,
+                message="User not found",
+                data={},
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+
+        activities = []
+        created_at = _get_user_created_at(user_obj)
+
+        if created_at:
+            activities.append(_build_user_activity_item(
+                key="account_created",
+                title="Account created",
+                description=f"{_get_user_full_name(user_obj)} joined LoanSphere.",
+                actor=_get_user_full_name(user_obj),
+                activity_type="account",
+                date=created_at,
+            ))
+
+        applications = LoanApplication.objects.filter(
+            user=user_obj,
+        ).select_related(
+            "loan_type",
+        ).prefetch_related(
+            "documents",
+            "admin_notes",
+        )
+
+        for application in applications:
+            activities.append(_build_user_activity_item(
+                key=f"application_created_{application.id}",
+                title="Application started",
+                description=f"{application.application_number} - {application.loan_type.name if application.loan_type else 'Loan'}",
+                actor=_get_user_full_name(user_obj),
+                activity_type="application",
+                date=application.created_at,
+            ))
+
+            if application.submitted_at:
+                activities.append(_build_user_activity_item(
+                    key=f"application_submitted_{application.id}",
+                    title="Application submitted",
+                    description=f"{application.application_number} was submitted for review.",
+                    actor=_get_user_full_name(user_obj),
+                    activity_type="submitted",
+                    date=application.submitted_at,
+                ))
+
+            for document in application.documents.all():
+                activities.append(_build_user_activity_item(
+                    key=f"document_uploaded_{document.id}",
+                    title="Document uploaded",
+                    description=f"{document.get_document_type_display()} - {document.original_file_name or 'Uploaded file'}",
+                    actor=_get_user_full_name(user_obj),
+                    activity_type="document",
+                    date=document.uploaded_at,
+                ))
+
+            for note in application.admin_notes.all():
+                activities.append(_build_user_activity_item(
+                    key=f"admin_note_{note.id}",
+                    title="Admin note added",
+                    description=note.note,
+                    actor=_get_user_full_name(note.created_by) if note.created_by else "Admin",
+                    activity_type="note",
+                    date=note.created_at,
+                ))
+
+        activities = sorted(
+            activities,
+            key=lambda item: item["date"] or timezone.now(),
+            reverse=True,
+        )
+
+        return build_response(
+            request,
+            success=True,
+            message="Admin user activity fetched successfully",
+            data={
+                "user": _build_admin_user_card(user_obj),
+                "activities": activities,
+            },
+            status_code=status.HTTP_200_OK,
+        )
+
+
+
+
