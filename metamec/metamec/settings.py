@@ -32,6 +32,8 @@ ALLOWED_HOSTS = []
 # Application definition
 
 INSTALLED_APPS = [
+    "daphne",
+    
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -50,6 +52,9 @@ INSTALLED_APPS = [
     'admin_review',
     'kyc_verification',
     'loan_agreements',
+    "channels",
+    "support_chat",
+
 
 ]
 
@@ -171,3 +176,25 @@ ONFIDO_WEBHOOK_SECRET = config("ONFIDO_WEBHOOK_SECRET", default="")
 
 
 SITE_BASE_URL = config("SITE_BASE_URL", default="http://127.0.0.1:8010")
+
+
+ASGI_APPLICATION = "metamec.asgi.application"
+
+CHAT_USE_REDIS = config("CHAT_USE_REDIS", default=False, cast=bool)
+REDIS_URL = config("REDIS_URL", default="redis://127.0.0.1:6379/0")
+
+if CHAT_USE_REDIS:
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels_redis.core.RedisChannelLayer",
+            "CONFIG": {
+                "hosts": [REDIS_URL],
+            },
+        },
+    }
+else:
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels.layers.InMemoryChannelLayer",
+        },
+    }
