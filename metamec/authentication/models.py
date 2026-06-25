@@ -36,6 +36,15 @@ class User(AbstractBaseUser, PermissionsMixin):
     full_name = models.CharField(max_length=150)
     email_address = models.EmailField(unique=True)
     phone_number = models.CharField(max_length=30, blank=True, null=True)
+
+    profile_image = models.FileField(upload_to="profile_images/", blank=True, null=True)
+    department = models.CharField(max_length=120, blank=True, null=True)
+    location = models.CharField(max_length=120, blank=True, null=True)
+
+    last_login_ip = models.GenericIPAddressField(blank=True, null=True)
+    last_login_browser = models.CharField(max_length=120, blank=True, null=True)
+    last_login_os = models.CharField(max_length=120, blank=True, null=True)
+
     password = models.CharField(max_length=255)
 
     agreed_terms_business = models.BooleanField(default=False)

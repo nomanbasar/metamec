@@ -21,7 +21,7 @@ from .utils import build_response
 from django.conf import settings
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.permissions import IsAuthenticated
-
+from loan_applications.models import LoanApplication
 User = get_user_model()
 
 
@@ -292,6 +292,23 @@ class LoginView(APIView):
                 status_code=status.HTTP_403_FORBIDDEN,
             )
 
+
+
+        browser, os_name = parse_user_agent(request)
+
+        user.last_login = timezone.now()
+        user.last_login_ip = get_client_ip(request)
+        user.last_login_browser = browser
+        user.last_login_os = os_name
+        user.save(
+            update_fields=[
+                "last_login",
+                "last_login_ip",
+                "last_login_browser",
+                "last_login_os",
+                "updated_at",
+            ]
+        )
         # JWT token generate
         refresh = RefreshToken.for_user(user)
 
@@ -516,30 +533,6 @@ class ResetPasswordView(APIView):
         )
 
 
-class MeView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request):
-        user = request.user
-
-        return build_response(
-            request,
-            success=True,
-            message="User profile fetched successfully",
-            data={
-                "id": user.id,
-                "full_name": user.full_name,
-                "email_address": user.email_address,
-                "phone_number": user.phone_number,
-                "role": user.role,
-                "is_email_verified": user.is_email_verified,
-                "is_active": user.is_active,
-                "is_staff": user.is_staff,
-                "is_superuser": user.is_superuser,
-            },
-            status_code=status.HTTP_200_OK,
-        )
-    
 
 class ResendForgotPasswordOTPView(APIView):
     permission_classes = [AllowAny]
@@ -620,5 +613,280 @@ class LogoutView(APIView):
             success=True,
             message="Logout successful",
             data={},
+            status_code=status.HTTP_200_OK,
+        )
+    
+
+def get_client_ip(request):
+    x_forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR")
+    if x_forwarded_for:
+        return x_forwarded_for.split(",")[0].strip()
+    return request.META.get("REMOTE_ADDR")
+
+
+def parse_user_agent(request):
+    user_agent = request.META.get("HTTP_USER_AGENT", "")
+
+    browser = "Unknown"
+    os_name = "Unknown"
+
+    if "Edg" in user_agent:
+        browser = "Microsoft Edge"
+    elif "Chrome" in user_agent:
+        browser = "Chrome"
+    elif "Firefox" in user_agent:
+        browser = "Firefox"
+    elif "Safari" in user_agent:
+        browser = "Safari"
+
+    if "Windows" in user_agent:
+        os_name = "Windows"
+    elif "Mac OS X" in user_agent or "Macintosh" in user_agent:
+        os_name = "macOS"
+    elif "Android" in user_agent:
+        os_name = "Android"
+    elif "iPhone" in user_agent or "iPad" in user_agent:
+        os_name = "iOS"
+    elif "Linux" in user_agent:
+        os_name = "Linux"
+
+    return browser, os_name
+
+
+def get_profile_image_data(request, user):
+    if not user.profile_image:
+        return {
+            "profile_image": None,
+            "profile_image_path": None,
+            "profile_image_url": None,
+        }
+
+    try:
+        image_path = user.profile_image.url
+    except Exception:
+        image_path = None
+
+    image_url = request.build_absolute_uri(image_path) if image_path else None
+
+    return {
+        "profile_image": image_url,
+        "profile_image_path": image_path,
+        "profile_image_url": image_url,
+    }
+
+
+def get_user_initials(user):
+    full_name = user.full_name or ""
+    parts = full_name.strip().split()
+
+    if len(parts) >= 2:
+        return f"{parts[0][0]}{parts[1][0]}".upper()
+
+    if len(parts) == 1 and parts[0]:
+        return parts[0][:2].upper()
+
+    return "U"
+
+
+def get_role_label(user):
+    if user.is_superuser:
+        return "Super Administrator"
+
+    if user.is_staff or user.role == "admin":
+        return "Administrator"
+
+    return "Customer"
+
+
+def format_datetime(value):
+    if not value:
+        return None
+    return timezone.localtime(value).strftime("%b %d, %Y, %I:%M %p")
+
+
+def build_me_response(request, user):
+    now = timezone.now()
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    current_month_apps = LoanApplication.objects.filter(updated_at__gte=month_start)
+
+    applications_reviewed = current_month_apps.exclude(
+        status=LoanApplication.STATUS_DRAFT
+    ).count()
+
+    approved = current_month_apps.filter(
+        status__in=[
+            LoanApplication.STATUS_APPROVED,
+            LoanApplication.STATUS_COMPLETED,
+        ]
+    ).count()
+
+    rejected = current_month_apps.filter(
+        status=LoanApplication.STATUS_REJECTED
+    ).count()
+
+    pending_review = current_month_apps.filter(
+        status__in=[
+            LoanApplication.STATUS_SUBMITTED,
+            LoanApplication.STATUS_UNDER_REVIEW,
+            LoanApplication.STATUS_PENDING_DOCUMENTS,
+            LoanApplication.STATUS_KYC_REQUIRED,
+        ]
+    ).count()
+
+    profile_image_data = get_profile_image_data(request, user)
+
+    return {
+        "id": user.id,
+        "full_name": user.full_name,
+        "email_address": user.email_address,
+        "phone_number": user.phone_number,
+        "profile_image": profile_image_data["profile_image"],
+        "profile_image_path": profile_image_data["profile_image_path"],
+        "profile_image_url": profile_image_data["profile_image_url"],
+        "department": user.department,
+        "location": user.location,
+        "role": user.role,
+        "role_label": get_role_label(user),
+        "is_email_verified": user.is_email_verified,
+        "is_active": user.is_active,
+        "is_staff": user.is_staff,
+        "is_superuser": user.is_superuser,
+
+        "header": {
+            "initials": get_user_initials(user),
+            "full_name": user.full_name,
+            "email_address": user.email_address,
+            "department": user.department,
+            "location": user.location,
+            "role_label": get_role_label(user),
+            "status": "Active" if user.is_active else "Inactive",
+            "profile_image": profile_image_data["profile_image"],
+            "profile_image_path": profile_image_data["profile_image_path"],
+        },
+
+        "personal_information": {
+            "full_name": user.full_name,
+            "email_address": user.email_address,
+            "phone_number": user.phone_number,
+            "department": user.department,
+            "location": user.location,
+            "role": get_role_label(user),
+        },
+
+        "this_month": {
+            "applications_reviewed": applications_reviewed,
+            "approved": approved,
+            "rejected": rejected,
+            "pending_review": pending_review,
+        },
+
+        "last_login": {
+            "time": format_datetime(user.last_login),
+            "ip_address": user.last_login_ip,
+            "browser": user.last_login_browser,
+            "os": user.last_login_os,
+            "location": user.location,
+        },
+    }
+
+
+
+class MeView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        return build_response(
+            request,
+            success=True,
+            message="User profile fetched successfully",
+            data=build_me_response(request, request.user),
+            status_code=status.HTTP_200_OK,
+        )
+
+    def patch(self, request):
+        user = request.user
+
+        full_name = request.data.get("full_name")
+        email_address = request.data.get("email_address")
+        phone_number = request.data.get("phone_number")
+        department = request.data.get("department")
+        location = request.data.get("location")
+
+        profile_image = (
+            request.FILES.get("profile_image")
+            or request.FILES.get("image")
+            or request.FILES.get("avatar")
+        )
+
+        remove_profile_image = str(
+            request.data.get("remove_profile_image", "")
+        ).lower() in ["true", "1", "yes"]
+
+        errors = {}
+
+        if full_name is not None and not str(full_name).strip():
+            errors["full_name"] = ["Full name cannot be empty."]
+
+        if email_address is not None:
+            email_address = str(email_address).strip().lower()
+
+            if not email_address:
+                errors["email_address"] = ["Email address cannot be empty."]
+            elif User.objects.filter(email_address=email_address).exclude(id=user.id).exists():
+                errors["email_address"] = ["This email address is already used."]
+
+        if errors:
+            return build_response(
+                request,
+                success=False,
+                message="Validation error",
+                data=errors,
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        update_fields = []
+
+        if full_name is not None:
+            user.full_name = str(full_name).strip()
+            update_fields.append("full_name")
+
+        if email_address is not None:
+            user.email_address = email_address
+            update_fields.append("email_address")
+
+        if phone_number is not None:
+            user.phone_number = str(phone_number).strip() or None
+            update_fields.append("phone_number")
+
+        if department is not None:
+            user.department = str(department).strip() or None
+            update_fields.append("department")
+
+        if location is not None:
+            user.location = str(location).strip() or None
+            update_fields.append("location")
+
+        if remove_profile_image:
+            if user.profile_image:
+                user.profile_image.delete(save=False)
+            user.profile_image = None
+            update_fields.append("profile_image")
+
+        if profile_image:
+            if user.profile_image:
+                user.profile_image.delete(save=False)
+            user.profile_image = profile_image
+            update_fields.append("profile_image")
+
+        if update_fields:
+            update_fields.append("updated_at")
+            user.save(update_fields=update_fields)
+
+        return build_response(
+            request,
+            success=True,
+            message="User profile updated successfully",
+            data=build_me_response(request, user),
             status_code=status.HTTP_200_OK,
         )
