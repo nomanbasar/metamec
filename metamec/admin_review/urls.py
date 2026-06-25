@@ -14,6 +14,7 @@ from .views import (
     AdminUserSuspendView,
     AdminUserActivateView,
     AdminUserActivityView,
+    AdminDashboardView,
 )
 
 
@@ -31,6 +32,5 @@ urlpatterns = [
     path("admin/users/<uuid:user_id>/suspend/",AdminUserSuspendView.as_view(),name="admin_user_suspend"),
     path("admin/users/<uuid:user_id>/activate/",AdminUserActivateView.as_view(),name="admin_user_activate"),
     path("admin/users/<uuid:user_id>/activity/",AdminUserActivityView.as_view(),name="admin_user_activity"),
-
-
+    path("admin/dashboard/",AdminDashboardView.as_view(),name="admin_dashboard"),
 ]

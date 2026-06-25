@@ -1,7 +1,7 @@
 import math
 from decimal import Decimal, ROUND_HALF_UP
 
-from django.db.models import Q, Count
+from django.db.models import Q, Count, Sum
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 
@@ -1480,5 +1480,504 @@ class AdminUserActivityView(APIView):
         )
 
 
+def _decimal_or_zero(value):
+    try:
+        if value is None:
+            return Decimal("0")
+        return Decimal(value)
+    except Exception:
+        return Decimal("0")
 
+
+def _compact_money_display(value):
+    amount = _decimal_or_zero(value)
+    sign = "-" if amount < 0 else ""
+    amount = abs(amount)
+
+    if amount >= Decimal("1000000000"):
+        return f"{sign}${amount / Decimal('1000000000'):.1f}B"
+
+    if amount >= Decimal("1000000"):
+        return f"{sign}${amount / Decimal('1000000'):.1f}M"
+
+    if amount >= Decimal("1000"):
+        return f"{sign}${amount / Decimal('1000'):.1f}K"
+
+    return f"{sign}${amount:,.0f}"
+
+
+def _percent_display(value):
+    try:
+        value = Decimal(value).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    except Exception:
+        value = Decimal("0")
+
+    if value == value.to_integral_value():
+        return f"{int(value)}%"
+
+    return f"{value}%"
+
+
+def _percentage_change_display(current, previous):
+    current = _decimal_or_zero(current)
+    previous = _decimal_or_zero(previous)
+
+    if previous == 0:
+        if current == 0:
+            return "0%"
+        return "+100%"
+
+    change = ((current - previous) / previous) * Decimal("100")
+    change = change.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    sign = "+" if change > 0 else ""
+    return f"{sign}{change}%"
+
+
+def _count_change_display(current, previous):
+    try:
+        diff = int(current or 0) - int(previous or 0)
+    except Exception:
+        diff = 0
+
+    if diff > 0:
+        return f"+{diff}"
+
+    return str(diff)
+
+
+def _money_change_display(current, previous):
+    diff = _decimal_or_zero(current) - _decimal_or_zero(previous)
+    sign = "+" if diff > 0 else ""
+    return f"{sign}{_compact_money_display(diff)}"
+
+
+def _add_months(value, months):
+    month_index = value.month - 1 + months
+    year = value.year + month_index // 12
+    month = month_index % 12 + 1
+    return value.replace(year=year, month=month, day=1)
+
+
+def _month_label(value):
+    return value.strftime("%b")
+
+
+def _dashboard_approved_statuses():
+    return [
+        LoanApplication.STATUS_APPROVED,
+        LoanApplication.STATUS_COMPLETED,
+    ]
+
+
+def _dashboard_pending_review_statuses():
+    return [
+        LoanApplication.STATUS_SUBMITTED,
+        LoanApplication.STATUS_UNDER_REVIEW,
+    ]
+
+
+def _dashboard_pending_statuses():
+    return [
+        LoanApplication.STATUS_SUBMITTED,
+        LoanApplication.STATUS_UNDER_REVIEW,
+        LoanApplication.STATUS_PENDING_DOCUMENTS,
+        LoanApplication.STATUS_KYC_REQUIRED,
+        LoanApplication.STATUS_DRAFT,
+    ]
+
+
+def _sum_loan_amount(queryset):
+    return queryset.aggregate(total=Sum("loan_amount")).get("total") or Decimal("0")
+
+
+def _short_loan_type_name(name):
+    if not name:
+        return "Unknown"
+
+    value = str(name).strip()
+
+    if "consolidation" in value.lower():
+        return "Debt Consol."
+
+    if value.lower().endswith(" loan"):
+        return value[:-5]
+
+    return value
+
+
+def _status_dashboard_item(label, status_key, count, total, badge_type):
+    total = int(total or 0)
+    count = int(count or 0)
+    percent = int(round((count / total) * 100)) if total else 0
+
+    return {
+        "key": status_key,
+        "status": status_key,
+        "label": label,
+        "count": count,
+        "percent": percent,
+        "percentDisplay": _percent_display(percent),
+        "badgeType": badge_type,
+    }
+
+
+def _recent_dashboard_application(application):
+    calculated_data = _application_calculated_data(application)
+
+    return {
+        "id": application.id,
+        "applicationNumber": application.application_number,
+        "customer": _customer_dict(application.user),
+        "customerName": _get_user_full_name(application.user),
+        "loanType": {
+            "id": application.loan_type.id if application.loan_type else None,
+            "name": application.loan_type.name if application.loan_type else None,
+            "shortName": _short_loan_type_name(application.loan_type.name if application.loan_type else None),
+        },
+        "type": _short_loan_type_name(application.loan_type.name if application.loan_type else None),
+        "amount": _money(application.loan_amount),
+        "amountDisplay": _money_display(application.loan_amount),
+        "status": application.status,
+        "statusLabel": _get_status_label(application.status),
+        "statusBadgeType": _get_status_badge_type(application.status),
+        "dtiRatio": calculated_data.get("dtiRatio"),
+        "dtiRatioDisplay": calculated_data.get("dtiRatioDisplay"),
+        "date": application.created_at,
+        "dateDisplay": application.created_at.strftime("%b %d, %Y") if application.created_at else "",
+        "detailApi": f"/api/admin/applications/{application.id}/",
+    }
+
+
+class AdminDashboardView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not _is_admin_user(request.user):
+            return _admin_required_response(request)
+
+        now = timezone.now()
+        current_month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        next_month_start = _add_months(current_month_start, 1)
+        previous_month_start = _add_months(current_month_start, -1)
+
+        all_qs = _application_queryset()
+        total_applications = all_qs.count()
+
+        pending_review_qs = all_qs.filter(status__in=_dashboard_pending_review_statuses())
+        approved_qs = all_qs.filter(status__in=_dashboard_approved_statuses())
+        rejected_qs = all_qs.filter(status=LoanApplication.STATUS_REJECTED)
+        pending_all_qs = all_qs.filter(status__in=_dashboard_pending_statuses())
+
+        pending_review_count = pending_review_qs.count()
+        approved_count = approved_qs.count()
+        rejected_count = rejected_qs.count()
+        pending_all_count = pending_all_qs.count()
+
+        approved_this_month = approved_qs.filter(
+            updated_at__gte=current_month_start,
+            updated_at__lt=next_month_start,
+        ).count()
+
+        approved_previous_month = approved_qs.filter(
+            updated_at__gte=previous_month_start,
+            updated_at__lt=current_month_start,
+        ).count()
+
+        total_portfolio = _sum_loan_amount(approved_qs)
+
+        current_month_applications = all_qs.filter(
+            created_at__gte=current_month_start,
+            created_at__lt=next_month_start,
+        ).count()
+
+        previous_month_applications = all_qs.filter(
+            created_at__gte=previous_month_start,
+            created_at__lt=current_month_start,
+        ).count()
+
+        current_month_pending_review = pending_review_qs.filter(
+            created_at__gte=current_month_start,
+            created_at__lt=next_month_start,
+        ).count()
+
+        previous_month_pending_review = pending_review_qs.filter(
+            created_at__gte=previous_month_start,
+            created_at__lt=current_month_start,
+        ).count()
+
+        current_month_portfolio = _sum_loan_amount(
+            approved_qs.filter(
+                updated_at__gte=current_month_start,
+                updated_at__lt=next_month_start,
+            )
+        )
+
+        previous_month_portfolio = _sum_loan_amount(
+            approved_qs.filter(
+                updated_at__gte=previous_month_start,
+                updated_at__lt=current_month_start,
+            )
+        )
+
+        summary_cards = [
+            {
+                "key": "totalApplications",
+                "title": "Total Applications",
+                "value": total_applications,
+                "valueDisplay": str(total_applications),
+                "change": _percentage_change_display(
+                    current_month_applications,
+                    previous_month_applications,
+                ),
+                "changeType": "positive" if current_month_applications >= previous_month_applications else "negative",
+            },
+            {
+                "key": "pendingReview",
+                "title": "Pending Review",
+                "value": pending_review_count,
+                "valueDisplay": str(pending_review_count),
+                "change": _count_change_display(
+                    current_month_pending_review,
+                    previous_month_pending_review,
+                ),
+                "changeType": "positive" if current_month_pending_review >= previous_month_pending_review else "negative",
+            },
+            {
+                "key": "approvedThisMonth",
+                "title": "Approved This Month",
+                "value": approved_this_month,
+                "valueDisplay": str(approved_this_month),
+                "change": _percentage_change_display(
+                    approved_this_month,
+                    approved_previous_month,
+                ),
+                "changeType": "positive" if approved_this_month >= approved_previous_month else "negative",
+            },
+            {
+                "key": "totalPortfolio",
+                "title": "Total Portfolio",
+                "value": _money(total_portfolio),
+                "valueDisplay": _compact_money_display(total_portfolio),
+                "fullValueDisplay": _money_display(total_portfolio),
+                "change": _money_change_display(
+                    current_month_portfolio,
+                    previous_month_portfolio,
+                ),
+                "changeType": "positive" if current_month_portfolio >= previous_month_portfolio else "negative",
+            },
+        ]
+
+        monthly_disbursements = []
+        first_chart_month = _add_months(current_month_start, -5)
+
+        for index in range(6):
+            month_start = _add_months(first_chart_month, index)
+            month_end = _add_months(month_start, 1)
+
+            amount = _sum_loan_amount(
+                approved_qs.filter(
+                    created_at__gte=month_start,
+                    created_at__lt=month_end,
+                )
+            )
+
+            monthly_disbursements.append({
+                "key": month_start.strftime("%Y-%m"),
+                "month": _month_label(month_start),
+                "label": _month_label(month_start),
+                "amount": _money(amount),
+                "amountDisplay": _compact_money_display(amount),
+                "fullAmountDisplay": _money_display(amount),
+            })
+
+        loan_type_rows = (
+            all_qs.values("loan_type_id", "loan_type__name")
+            .annotate(
+                count=Count("id"),
+                amount=Sum("loan_amount"),
+            )
+            .order_by("-count")
+        )
+
+        loan_type_distribution = []
+
+        for row in loan_type_rows:
+            count = int(row.get("count") or 0)
+            percent = int(round((count / total_applications) * 100)) if total_applications else 0
+            name = row.get("loan_type__name") or "Unknown"
+
+            loan_type_distribution.append({
+                "id": row.get("loan_type_id"),
+                "name": name,
+                "shortName": _short_loan_type_name(name),
+                "count": count,
+                "value": percent,
+                "percent": percent,
+                "percentDisplay": _percent_display(percent),
+                "amount": _money(row.get("amount") or 0),
+                "amountDisplay": _money_display(row.get("amount") or 0),
+            })
+
+        approved_status_count = approved_count
+
+        under_review_count = all_qs.filter(
+            status__in=[
+                LoanApplication.STATUS_SUBMITTED,
+                LoanApplication.STATUS_UNDER_REVIEW,
+            ]
+        ).count()
+
+        pending_docs_count = all_qs.filter(
+            status=LoanApplication.STATUS_PENDING_DOCUMENTS,
+        ).count()
+
+        rejected_status_count = rejected_count
+
+        status_overview = [
+            _status_dashboard_item(
+                "Approved",
+                "approved",
+                approved_status_count,
+                total_applications,
+                "green",
+            ),
+            _status_dashboard_item(
+                "Under Review",
+                "under_review",
+                under_review_count,
+                total_applications,
+                "yellow",
+            ),
+            _status_dashboard_item(
+                "Pending Docs",
+                "pending_documents",
+                pending_docs_count,
+                total_applications,
+                "orange",
+            ),
+            _status_dashboard_item(
+                "Rejected",
+                "rejected",
+                rejected_status_count,
+                total_applications,
+                "red",
+            ),
+        ]
+
+        approval_rate = int(round((approved_count / total_applications) * 100)) if total_applications else 0
+        approved_percent = int(round((approved_count / total_applications) * 100)) if total_applications else 0
+        rejected_percent = int(round((rejected_count / total_applications) * 100)) if total_applications else 0
+        pending_percent = int(round((pending_all_count / total_applications) * 100)) if total_applications else 0
+
+        previous_month_total = all_qs.filter(
+            created_at__gte=previous_month_start,
+            created_at__lt=current_month_start,
+        ).count()
+
+        previous_month_approved_total = approved_qs.filter(
+            updated_at__gte=previous_month_start,
+            updated_at__lt=current_month_start,
+        ).count()
+
+        previous_month_approval_rate = (
+            int(round((previous_month_approved_total / previous_month_total) * 100))
+            if previous_month_total
+            else 0
+        )
+
+        quick_actions = [
+            {
+                "key": "reviewPendingApplications",
+                "title": "Review Pending Applications",
+                "description": "Open applications waiting for admin review",
+                "url": "/api/admin/applications/?status=under_review",
+            },
+            {
+                "key": "viewAiInsights",
+                "title": "View AI Insights",
+                "description": "Review risk scoring and portfolio intelligence",
+                "url": "/api/admin/ai-insights/",
+            },
+            {
+                "key": "manageUsers",
+                "title": "Manage Users",
+                "description": "Open customer and admin user management",
+                "url": "/api/admin/users/",
+            },
+            {
+                "key": "customerMessages",
+                "title": "Customer Messages",
+                "description": "Open customer conversations",
+                "url": "/api/admin/messages/",
+            },
+        ]
+
+        recent_applications = [
+            _recent_dashboard_application(application)
+            for application in all_qs.order_by("-created_at")[:8]
+        ]
+
+        data = {
+            "summaryCards": summary_cards,
+
+            "monthlyDisbursements": {
+                "title": "Monthly Disbursements",
+                "subtitle": "Last 6 months",
+                "source": "Approved loan applications",
+                "items": monthly_disbursements,
+            },
+
+            "loanTypeDistribution": {
+                "title": "Loan Type Distribution",
+                "subtitle": "Portfolio breakdown",
+                "items": loan_type_distribution,
+            },
+
+            "statusOverview": {
+                "title": "Status Overview",
+                "items": status_overview,
+            },
+
+            "quickActions": quick_actions,
+
+            "approvalRate": {
+                "title": "Approval Rate",
+                "rate": approval_rate,
+                "rateDisplay": _percent_display(approval_rate),
+                "subtitle": f"This month vs {previous_month_approval_rate}% last month",
+                "previousMonthRate": previous_month_approval_rate,
+                "approved": approved_percent,
+                "approvedDisplay": _percent_display(approved_percent),
+                "rejected": rejected_percent,
+                "rejectedDisplay": _percent_display(rejected_percent),
+                "pending": pending_percent,
+                "pendingDisplay": _percent_display(pending_percent),
+            },
+
+            "recentApplications": {
+                "title": "Recent Applications",
+                "viewAllApi": "/api/admin/applications/",
+                "items": recent_applications,
+            },
+        }
+
+        meta = {
+            "generatedAt": now,
+            "filters": {},
+            "summary": {
+                "totalApplications": total_applications,
+                "pendingReview": pending_review_count,
+                "approvedThisMonth": approved_this_month,
+                "totalPortfolio": _money(total_portfolio),
+            },
+        }
+
+        return build_response(
+            request,
+            success=True,
+            message="Admin dashboard fetched successfully",
+            meta=meta,
+            data=data,
+            status_code=status.HTTP_200_OK,
+        )
 
