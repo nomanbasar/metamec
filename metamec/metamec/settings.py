@@ -48,6 +48,8 @@ INSTALLED_APPS = [
     'loan_applications',
     'loan_documents',
     'admin_review',
+    'kyc_verification',
+
 ]
 
 MIDDLEWARE = [
@@ -161,3 +163,7 @@ OTP_MAX_ATTEMPTS = 100
 OTP_MAX_RESEND = 40
 PASSWORD_RESET_TOKEN_EXPIRE_MINUTES = 100
 
+
+KYC_PROVIDER = config("KYC_PROVIDER", default="mock")
+ONFIDO_API_TOKEN = config("ONFIDO_API_TOKEN", default="")
+ONFIDO_WEBHOOK_SECRET = config("ONFIDO_WEBHOOK_SECRET", default="")
