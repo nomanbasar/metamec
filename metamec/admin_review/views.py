@@ -1981,3 +1981,452 @@ class AdminDashboardView(APIView):
             status_code=status.HTTP_200_OK,
         )
 
+
+
+def _ai_recommendation_key(score):
+    try:
+        score = int(score or 0)
+    except Exception:
+        score = 0
+
+    if score >= 70:
+        return "approve"
+
+    if score >= 45:
+        return "review"
+
+    return "reject"
+
+
+def _ai_recommendation_label(score):
+    key = _ai_recommendation_key(score)
+
+    mapping = {
+        "approve": "Approve",
+        "review": "Review",
+        "reject": "Reject",
+    }
+
+    return mapping.get(key, "Review")
+
+
+def _ai_recommendation_badge_type(score):
+    key = _ai_recommendation_key(score)
+
+    mapping = {
+        "approve": "green",
+        "review": "yellow",
+        "reject": "red",
+    }
+
+    return mapping.get(key, "yellow")
+
+
+def _ai_percent_number(count, total):
+    try:
+        count = int(count or 0)
+        total = int(total or 0)
+    except Exception:
+        return 0
+
+    if total <= 0:
+        return 0
+
+    return int(round((count / total) * 100))
+
+
+def _ai_money_short(value):
+    amount = _decimal_or_zero(value)
+
+    if amount >= Decimal("1000000"):
+        return f"${amount / Decimal('1000000'):.1f}M"
+
+    if amount >= Decimal("1000"):
+        return f"${amount / Decimal('1000'):.1f}K"
+
+    return f"${amount:,.0f}"
+
+
+def _ai_employment_label(value):
+    mapping = {
+        LoanApplication.EMPLOYMENT_EMPLOYED: "Full-time",
+        LoanApplication.EMPLOYMENT_SELF_EMPLOYED: "Self-employed",
+        LoanApplication.EMPLOYMENT_OTHER: "Other",
+        "part_time": "Part-time",
+        "part-time": "Part-time",
+        "contract": "Contract",
+    }
+
+    return mapping.get(value, "Unknown")
+
+
+def _ai_report_summary(application, score, calculated_data=None):
+    calculated_data = calculated_data or _application_calculated_data(application)
+
+    customer_name = _get_user_full_name(application.user)
+    amount = _money_display(application.loan_amount) or "this amount"
+    loan_type = application.loan_type.name if application.loan_type else "loan"
+
+    dti_text = calculated_data.get("dtiRatioDisplay")
+    employment = _ai_employment_label(application.employment_type)
+
+    key = _ai_recommendation_key(score)
+
+    if key == "approve":
+        return (
+            f"{customer_name} presents a low-risk profile for this {amount} {loan_type}. "
+            f"Stable employment and DTI {dti_text or 'information'} support an approval recommendation."
+        )
+
+    if key == "review":
+        return (
+            f"{customer_name} requires manual review for this {amount} {loan_type}. "
+            f"The profile has moderate risk indicators and employment status is {employment}."
+        )
+
+    return (
+        f"{customer_name} presents higher risk for this {amount} {loan_type}. "
+        f"Credit history, DTI, or affordability indicators require careful review before approval."
+    )
+
+
+def _ai_build_report_item(application):
+    calculated_data = _application_calculated_data(application)
+    score = _risk_score(application, calculated_data)
+
+    return {
+        "id": application.id,
+        "application": application.application_number,
+        "applicationNumber": application.application_number,
+        "customer": _customer_dict(application.user),
+        "customerName": _get_user_full_name(application.user),
+
+        "loanType": {
+            "id": application.loan_type.id if application.loan_type else None,
+            "name": application.loan_type.name if application.loan_type else None,
+            "shortName": _short_loan_type_name(application.loan_type.name if application.loan_type else None),
+        },
+
+        "riskScore": score,
+        "riskScoreDisplay": f"{score}/100",
+
+        "recommendation": _ai_recommendation_key(score),
+        "recommendationLabel": _ai_recommendation_label(score),
+        "recommendationBadgeType": _ai_recommendation_badge_type(score),
+
+        "summary": _ai_report_summary(application, score, calculated_data),
+
+        "dtiRatio": calculated_data.get("dtiRatio"),
+        "dtiRatioDisplay": calculated_data.get("dtiRatioDisplay"),
+
+        "amount": _money(application.loan_amount),
+        "amountDisplay": _money_display(application.loan_amount),
+
+        "date": application.updated_at or application.created_at,
+        "dateDisplay": (application.updated_at or application.created_at).strftime("%b %d, %Y") if (application.updated_at or application.created_at) else "",
+
+        "detailApi": f"/api/admin/applications/{application.id}/",
+    }
+
+
+class AdminAIInsightsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not _is_admin_user(request.user):
+            return _admin_required_response(request)
+
+        now = timezone.now()
+        current_month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+        all_qs = _application_queryset().order_by("-updated_at")
+        total_applications = all_qs.count()
+
+        scores = []
+        approve_count = 0
+        review_count = 0
+        reject_count = 0
+
+        application_score_map = {}
+
+        for application in all_qs:
+            calculated_data = _application_calculated_data(application)
+            score = _risk_score(application, calculated_data)
+            key = _ai_recommendation_key(score)
+
+            scores.append(score)
+            application_score_map[str(application.id)] = score
+
+            if key == "approve":
+                approve_count += 1
+            elif key == "review":
+                review_count += 1
+            else:
+                reject_count += 1
+
+        avg_risk_score = int(round(sum(scores) / len(scores))) if scores else 0
+
+        approve_percent = _ai_percent_number(approve_count, total_applications)
+        review_percent = _ai_percent_number(review_count, total_applications)
+        reject_percent = _ai_percent_number(reject_count, total_applications)
+
+        summary_cards = [
+            {
+                "key": "avgRiskScore",
+                "title": "Avg Risk Score",
+                "value": avg_risk_score,
+                "valueDisplay": f"{avg_risk_score}/100",
+                "subtitle": "Avg Risk Score",
+            },
+            {
+                "key": "aiApprovals",
+                "title": "AI Approvals",
+                "value": approve_percent,
+                "valueDisplay": f"{approve_percent}%",
+                "count": approve_count,
+                "subtitle": "AI Approvals",
+            },
+            {
+                "key": "aiReviews",
+                "title": "AI Reviews",
+                "value": review_percent,
+                "valueDisplay": f"{review_percent}%",
+                "count": review_count,
+                "subtitle": "AI Reviews",
+            },
+            {
+                "key": "aiRejections",
+                "title": "AI Rejections",
+                "value": reject_percent,
+                "valueDisplay": f"{reject_percent}%",
+                "count": reject_count,
+                "subtitle": "AI Rejections",
+            },
+        ]
+
+        risk_distribution_items = [
+            {
+                "key": "approve",
+                "label": "Approve",
+                "count": approve_count,
+                "value": approve_count,
+                "percent": approve_percent,
+                "percentDisplay": f"{approve_percent}%",
+                "badgeType": "green",
+            },
+            {
+                "key": "review",
+                "label": "Review",
+                "count": review_count,
+                "value": review_count,
+                "percent": review_percent,
+                "percentDisplay": f"{review_percent}%",
+                "badgeType": "yellow",
+            },
+            {
+                "key": "reject",
+                "label": "Reject",
+                "count": reject_count,
+                "value": reject_count,
+                "percent": reject_percent,
+                "percentDisplay": f"{reject_percent}%",
+                "badgeType": "red",
+            },
+        ]
+
+        monthly_trends = []
+        first_chart_month = _add_months(current_month_start, -5)
+
+        for index in range(6):
+            month_start = _add_months(first_chart_month, index)
+            month_end = _add_months(month_start, 1)
+
+            month_qs = all_qs.filter(
+                created_at__gte=month_start,
+                created_at__lt=month_end,
+            )
+
+            month_approve = 0
+            month_review = 0
+            month_reject = 0
+
+            for application in month_qs:
+                score = application_score_map.get(str(application.id))
+
+                if score is None:
+                    score = _risk_score(application)
+
+                key = _ai_recommendation_key(score)
+
+                if key == "approve":
+                    month_approve += 1
+                elif key == "review":
+                    month_review += 1
+                else:
+                    month_reject += 1
+
+            monthly_trends.append({
+                "key": month_start.strftime("%Y-%m"),
+                "month": _month_label(month_start),
+                "label": _month_label(month_start),
+                "approve": month_approve,
+                "review": month_review,
+                "reject": month_reject,
+                "total": month_approve + month_review + month_reject,
+            })
+
+        loan_type_rows = (
+            all_qs.values("loan_type_id", "loan_type__name")
+            .annotate(
+                count=Count("id"),
+                amount=Sum("loan_amount"),
+            )
+            .order_by("-count")
+        )
+
+        loan_type_distribution_items = []
+
+        for row in loan_type_rows:
+            count = int(row.get("count") or 0)
+            percent = _ai_percent_number(count, total_applications)
+            name = row.get("loan_type__name") or "Unknown"
+
+            loan_type_distribution_items.append({
+                "id": row.get("loan_type_id"),
+                "name": name,
+                "shortName": _short_loan_type_name(name),
+                "count": count,
+                "value": percent,
+                "percent": percent,
+                "percentDisplay": f"{percent}%",
+                "amount": _money(row.get("amount") or 0),
+                "amountDisplay": _money_display(row.get("amount") or 0),
+            })
+
+        employment_raw_counts = {
+            "employed": 0,
+            "self_employed": 0,
+            "part_time": 0,
+            "contract": 0,
+            "other": 0,
+            "unknown": 0,
+        }
+
+        for application in all_qs:
+            employment_value = application.employment_type or "unknown"
+
+            if employment_value in employment_raw_counts:
+                employment_raw_counts[employment_value] += 1
+            else:
+                employment_raw_counts["unknown"] += 1
+
+        employment_distribution_items = [
+            {
+                "key": "employed",
+                "label": "Full-time",
+                "count": employment_raw_counts["employed"],
+                "value": _ai_percent_number(employment_raw_counts["employed"], total_applications),
+                "percent": _ai_percent_number(employment_raw_counts["employed"], total_applications),
+                "percentDisplay": f"{_ai_percent_number(employment_raw_counts['employed'], total_applications)}%",
+            },
+            {
+                "key": "self_employed",
+                "label": "Self-employed",
+                "count": employment_raw_counts["self_employed"],
+                "value": _ai_percent_number(employment_raw_counts["self_employed"], total_applications),
+                "percent": _ai_percent_number(employment_raw_counts["self_employed"], total_applications),
+                "percentDisplay": f"{_ai_percent_number(employment_raw_counts['self_employed'], total_applications)}%",
+            },
+            {
+                "key": "part_time",
+                "label": "Part-time",
+                "count": employment_raw_counts["part_time"],
+                "value": _ai_percent_number(employment_raw_counts["part_time"], total_applications),
+                "percent": _ai_percent_number(employment_raw_counts["part_time"], total_applications),
+                "percentDisplay": f"{_ai_percent_number(employment_raw_counts['part_time'], total_applications)}%",
+            },
+            {
+                "key": "contract",
+                "label": "Contract",
+                "count": employment_raw_counts["contract"],
+                "value": _ai_percent_number(employment_raw_counts["contract"], total_applications),
+                "percent": _ai_percent_number(employment_raw_counts["contract"], total_applications),
+                "percentDisplay": f"{_ai_percent_number(employment_raw_counts['contract'], total_applications)}%",
+            },
+        ]
+
+        if employment_raw_counts["other"] > 0:
+            employment_distribution_items.append({
+                "key": "other",
+                "label": "Other",
+                "count": employment_raw_counts["other"],
+                "value": _ai_percent_number(employment_raw_counts["other"], total_applications),
+                "percent": _ai_percent_number(employment_raw_counts["other"], total_applications),
+                "percentDisplay": f"{_ai_percent_number(employment_raw_counts['other'], total_applications)}%",
+            })
+
+        if employment_raw_counts["unknown"] > 0:
+            employment_distribution_items.append({
+                "key": "unknown",
+                "label": "Unknown",
+                "count": employment_raw_counts["unknown"],
+                "value": _ai_percent_number(employment_raw_counts["unknown"], total_applications),
+                "percent": _ai_percent_number(employment_raw_counts["unknown"], total_applications),
+                "percentDisplay": f"{_ai_percent_number(employment_raw_counts['unknown'], total_applications)}%",
+            })
+
+        recent_ai_reports = [
+            _ai_build_report_item(application)
+            for application in all_qs[:10]
+        ]
+
+        data = {
+            "summaryCards": summary_cards,
+
+            "riskScoreDistribution": {
+                "title": "Risk Score Distribution",
+                "items": risk_distribution_items,
+            },
+
+            "monthlyAssessmentTrends": {
+                "title": "Monthly AI Assessment Trends",
+                "subtitle": "Last 6 months",
+                "items": monthly_trends,
+            },
+
+            "loanTypeDistribution": {
+                "title": "Loan Type Distribution",
+                "items": loan_type_distribution_items,
+            },
+
+            "employmentTypeDistribution": {
+                "title": "Employment Type Distribution",
+                "items": employment_distribution_items,
+            },
+
+            "recentAIReports": {
+                "title": "Recent AI Reports",
+                "items": recent_ai_reports,
+            },
+        }
+
+        meta = {
+            "generatedAt": now,
+            "summary": {
+                "totalApplications": total_applications,
+                "avgRiskScore": avg_risk_score,
+                "approveCount": approve_count,
+                "reviewCount": review_count,
+                "rejectCount": reject_count,
+            },
+            "note": "This AI Insights response is generated using rule-based risk scoring from existing loan application data.",
+        }
+
+        return build_response(
+            request,
+            success=True,
+            message="Admin AI insights fetched successfully",
+            meta=meta,
+            data=data,
+            status_code=status.HTTP_200_OK,
+        )
