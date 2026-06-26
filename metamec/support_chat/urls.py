@@ -4,7 +4,9 @@ from .views import (
     AdminSupportAgentAvailabilityView,
     AdminSupportAppointmentListView,
     AdminSupportAppointmentStatusView,
+    AdminSupportAvailabilityDetailView,
     AdminSupportCaseManagerListCreateView,
+    AdminSupportCaseManagerDetailView,
     ChatAssignAdminView,
     ChatConversationDetailView,
     ChatConversationListCreateView,
@@ -45,6 +47,18 @@ urlpatterns = [
         "chat/conversations/<uuid:conversation_id>/assign/",
         ChatAssignAdminView.as_view(),
         name="chat_assign_admin",
+    ),
+
+    path(
+        "admin/support/availability/<uuid:availability_id>/",
+        AdminSupportAvailabilityDetailView.as_view(),
+        name="admin_support_availability_detail",
+    ),
+
+    path(
+        "admin/support/case-managers/<uuid:manager_id>/",
+        AdminSupportCaseManagerDetailView.as_view(),
+        name="admin_support_case_manager_detail",
     ),
 
     # Customer Book a Call APIs

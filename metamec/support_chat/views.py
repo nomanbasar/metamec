@@ -32,6 +32,28 @@ def _truthy(value):
 
     return str(value).strip().lower() in ["true", "1", "yes", "y", "on"]
 
+
+def _normalize_call_types(value):
+    if value is None or value == "":
+        return [SupportAppointment.CALL_PHONE, SupportAppointment.CALL_LIVE_CHAT]
+
+    if isinstance(value, list):
+        items = value
+    elif isinstance(value, str):
+        text = value.strip()
+
+        if text.startswith("[") and text.endswith("]"):
+            text = text.replace("[", "").replace("]", "").replace('"', "").replace("'", "")
+
+        items = [item.strip() for item in text.split(",") if item.strip()]
+    else:
+        items = []
+
+    allowed = [SupportAppointment.CALL_PHONE, SupportAppointment.CALL_LIVE_CHAT]
+
+    return [item for item in items if item in allowed] or allowed
+
+
 def _is_admin_user(user):
     if not user or not user.is_authenticated:
         return False
@@ -1170,6 +1192,7 @@ class SupportAppointmentRescheduleView(APIView):
 
 class AdminSupportCaseManagerListCreateView(APIView):
     permission_classes = [IsAuthenticated]
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
 
     def get(self, request):
         if not _is_admin_user(request.user):
@@ -1228,27 +1251,32 @@ class AdminSupportCaseManagerListCreateView(APIView):
                 status_code=status.HTTP_400_BAD_REQUEST,
             )
 
-        available_call_types = request.data.get("available_call_types") or request.data.get("availableCallTypes")
-
-        if isinstance(available_call_types, str):
-            available_call_types = [item.strip() for item in available_call_types.split(",") if item.strip()]
-
-        if not available_call_types:
-            available_call_types = [SupportAppointment.CALL_PHONE, SupportAppointment.CALL_LIVE_CHAT]
-
         agent = SupportAgent.objects.create(
             user=linked_user,
             name=name,
             email=email,
             phone_number=request.data.get("phone_number") or request.data.get("phoneNumber"),
-            title=request.data.get("title") or "Senior Loan Advisor",
-            speciality=request.data.get("speciality") or "Homeowner Loans",
-            rating=request.data.get("rating") or 4.9,
-            reviews_count=request.data.get("reviews_count") or request.data.get("reviewsCount") or 312,
-            available_call_types=available_call_types,
+            title=request.data.get("title") or "Loan Advisor",
+            speciality=request.data.get("speciality") or "",
+            rating=request.data.get("rating") or 0,
+            reviews_count=_to_int(
+                request.data.get("reviews_count") or request.data.get("reviewsCount"),
+                0,
+            ),
+            available_call_types=_normalize_call_types(
+                request.data.get("available_call_types") or request.data.get("availableCallTypes")
+            ),
             is_active=_truthy(request.data.get("is_active", True)),
-            sort_order=request.data.get("sort_order") or request.data.get("sortOrder") or 0,
+            sort_order=_to_int(
+                request.data.get("sort_order") or request.data.get("sortOrder"),
+                0,
+            ),
         )
+
+        avatar = request.FILES.get("avatar")
+        if avatar:
+            agent.avatar = avatar
+            agent.save(update_fields=["avatar", "updated_at"])
 
         return build_response(
             request,
@@ -1256,6 +1284,153 @@ class AdminSupportCaseManagerListCreateView(APIView):
             message="Case manager created successfully",
             data=_agent_payload(request, agent),
             status_code=status.HTTP_201_CREATED,
+        )
+
+
+class AdminSupportCaseManagerDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
+
+    def get_object(self, manager_id):
+        return SupportAgent.objects.filter(id=manager_id).first()
+
+    def get(self, request, manager_id):
+        if not _is_admin_user(request.user):
+            return build_response(
+                request,
+                success=False,
+                message="Admin permission required",
+                data={},
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+
+        agent = self.get_object(manager_id)
+
+        if not agent:
+            return build_response(
+                request,
+                success=False,
+                message="Case manager not found",
+                data={},
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+
+        return build_response(
+            request,
+            success=True,
+            message="Case manager fetched successfully",
+            data=_agent_payload(request, agent),
+            status_code=status.HTTP_200_OK,
+        )
+
+    def patch(self, request, manager_id):
+        if not _is_admin_user(request.user):
+            return build_response(
+                request,
+                success=False,
+                message="Admin permission required",
+                data={},
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+
+        agent = self.get_object(manager_id)
+
+        if not agent:
+            return build_response(
+                request,
+                success=False,
+                message="Case manager not found",
+                data={},
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+
+        if "name" in request.data:
+            agent.name = request.data.get("name") or agent.name
+
+        if "email" in request.data:
+            agent.email = request.data.get("email") or None
+
+        if "phone_number" in request.data or "phoneNumber" in request.data:
+            agent.phone_number = request.data.get("phone_number") or request.data.get("phoneNumber") or None
+
+        if "title" in request.data:
+            agent.title = request.data.get("title") or ""
+
+        if "speciality" in request.data:
+            agent.speciality = request.data.get("speciality") or ""
+
+        if "rating" in request.data:
+            agent.rating = request.data.get("rating") or 0
+
+        if "reviews_count" in request.data or "reviewsCount" in request.data:
+            agent.reviews_count = _to_int(
+                request.data.get("reviews_count") or request.data.get("reviewsCount"),
+                0,
+            )
+
+        if "available_call_types" in request.data or "availableCallTypes" in request.data:
+            agent.available_call_types = _normalize_call_types(
+                request.data.get("available_call_types") or request.data.get("availableCallTypes")
+            )
+
+        if "is_active" in request.data or "isActive" in request.data:
+            agent.is_active = _truthy(request.data.get("is_active", request.data.get("isActive")))
+
+        if "sort_order" in request.data or "sortOrder" in request.data:
+            agent.sort_order = _to_int(
+                request.data.get("sort_order") or request.data.get("sortOrder"),
+                0,
+            )
+
+        avatar = request.FILES.get("avatar")
+        if avatar:
+            agent.avatar = avatar
+
+        if _truthy(request.data.get("remove_avatar", False)) or _truthy(request.data.get("removeAvatar", False)):
+            if agent.avatar:
+                agent.avatar.delete(save=False)
+            agent.avatar = None
+
+        agent.save()
+
+        return build_response(
+            request,
+            success=True,
+            message="Case manager updated successfully",
+            data=_agent_payload(request, agent),
+            status_code=status.HTTP_200_OK,
+        )
+
+    def delete(self, request, manager_id):
+        if not _is_admin_user(request.user):
+            return build_response(
+                request,
+                success=False,
+                message="Admin permission required",
+                data={},
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+
+        agent = self.get_object(manager_id)
+
+        if not agent:
+            return build_response(
+                request,
+                success=False,
+                message="Case manager not found",
+                data={},
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+
+        agent.is_active = False
+        agent.save(update_fields=["is_active", "updated_at"])
+
+        return build_response(
+            request,
+            success=True,
+            message="Case manager disabled successfully",
+            data=_agent_payload(request, agent),
+            status_code=status.HTTP_200_OK,
         )
 
 
@@ -1392,6 +1567,145 @@ class AdminSupportAgentAvailabilityView(APIView):
         )
 
 
+class AdminSupportAvailabilityDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get_object(self, availability_id):
+        return AgentAvailability.objects.select_related("agent").filter(id=availability_id).first()
+
+    def patch(self, request, availability_id):
+        if not _is_admin_user(request.user):
+            return build_response(
+                request,
+                success=False,
+                message="Admin permission required",
+                data={},
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+
+        availability = self.get_object(availability_id)
+
+        if not availability:
+            return build_response(
+                request,
+                success=False,
+                message="Availability rule not found",
+                data={},
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+
+        if "weekday" in request.data:
+            try:
+                weekday = int(request.data.get("weekday"))
+                if weekday < 0 or weekday > 6:
+                    raise ValueError()
+                availability.weekday = weekday
+            except Exception:
+                return build_response(
+                    request,
+                    success=False,
+                    message="Invalid weekday. Use 0-6.",
+                    data={},
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                )
+
+        if "start_time" in request.data or "startTime" in request.data:
+            start_time = _parse_time(request.data.get("start_time") or request.data.get("startTime"))
+            if not start_time:
+                return build_response(
+                    request,
+                    success=False,
+                    message="Invalid start_time. Format: HH:MM",
+                    data={},
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                )
+            availability.start_time = start_time
+
+        if "end_time" in request.data or "endTime" in request.data:
+            end_time = _parse_time(request.data.get("end_time") or request.data.get("endTime"))
+            if not end_time:
+                return build_response(
+                    request,
+                    success=False,
+                    message="Invalid end_time. Format: HH:MM",
+                    data={},
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                )
+            availability.end_time = end_time
+
+        if availability.end_time <= availability.start_time:
+            return build_response(
+                request,
+                success=False,
+                message="end_time must be greater than start_time.",
+                data={},
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if "slot_duration_minutes" in request.data or "slotDurationMinutes" in request.data:
+            availability.slot_duration_minutes = _to_int(
+                request.data.get("slot_duration_minutes") or request.data.get("slotDurationMinutes"),
+                30,
+            )
+
+        if "break_start_time" in request.data or "breakStartTime" in request.data:
+            availability.break_start_time = _parse_time(
+                request.data.get("break_start_time") or request.data.get("breakStartTime")
+            )
+
+        if "break_end_time" in request.data or "breakEndTime" in request.data:
+            availability.break_end_time = _parse_time(
+                request.data.get("break_end_time") or request.data.get("breakEndTime")
+            )
+
+        if "is_active" in request.data or "isActive" in request.data:
+            availability.is_active = _truthy(request.data.get("is_active", request.data.get("isActive")))
+
+        availability.save()
+
+        return build_response(
+            request,
+            success=True,
+            message="Availability rule updated successfully",
+            data={
+                "manager": _agent_payload(request, availability.agent),
+                "availability": _availability_payload(availability),
+            },
+            status_code=status.HTTP_200_OK,
+        )
+
+    def delete(self, request, availability_id):
+        if not _is_admin_user(request.user):
+            return build_response(
+                request,
+                success=False,
+                message="Admin permission required",
+                data={},
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+
+        availability = self.get_object(availability_id)
+
+        if not availability:
+            return build_response(
+                request,
+                success=False,
+                message="Availability rule not found",
+                data={},
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+
+        availability.delete()
+
+        return build_response(
+            request,
+            success=True,
+            message="Availability rule deleted successfully",
+            data={},
+            status_code=status.HTTP_200_OK,
+        )
+
+
 class AdminSupportAppointmentListView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -1510,24 +1824,28 @@ class AdminSupportAppointmentStatusView(APIView):
 class SupportBookCallView(APIView):
     permission_classes = [IsAuthenticated]
 
-    def _get_selected_agent(self, manager_id=None, call_type=None):
+    def _get_agent(self, manager_id=None, call_type=None):
         queryset = SupportAgent.objects.filter(is_active=True).order_by("sort_order", "name")
 
         if manager_id:
-            queryset = queryset.filter(id=manager_id)
+            return queryset.filter(id=manager_id).first()
+
+        agents = list(queryset)
 
         if call_type:
-            agents = list(queryset)
             for agent in agents:
                 if call_type in (agent.available_call_types or []):
                     return agent
-            return queryset.first()
 
-        return queryset.first()
+        return agents[0] if agents else None
 
     def get(self, request):
         manager_id = request.query_params.get("manager_id") or request.query_params.get("managerId")
-        call_type = request.query_params.get("call_type") or request.query_params.get("callType") or SupportAppointment.CALL_PHONE
+        call_type = (
+            request.query_params.get("call_type")
+            or request.query_params.get("callType")
+            or SupportAppointment.CALL_PHONE
+        )
         date_value = request.query_params.get("date")
 
         if call_type not in [SupportAppointment.CALL_PHONE, SupportAppointment.CALL_LIVE_CHAT]:
@@ -1539,10 +1857,7 @@ class SupportBookCallView(APIView):
                 status_code=status.HTTP_400_BAD_REQUEST,
             )
 
-        if date_value:
-            selected_date = _parse_date(date_value)
-        else:
-            selected_date = timezone.localdate() + timedelta(days=1)
+        selected_date = _parse_date(date_value) if date_value else timezone.localdate()
 
         if not selected_date:
             return build_response(
@@ -1553,36 +1868,29 @@ class SupportBookCallView(APIView):
                 status_code=status.HTTP_400_BAD_REQUEST,
             )
 
-        agent = self._get_selected_agent(manager_id=manager_id, call_type=call_type)
+        agent = self._get_agent(manager_id=manager_id, call_type=call_type)
 
         if not agent:
             return build_response(
                 request,
                 success=False,
-                message="No active case manager found. Please create a case manager first.",
+                message="No active case manager configured. Admin must create a case manager first.",
                 data={
-                    "adminCreateManagerApi": "/api/admin/support/case-managers/",
-                    "adminCreateAvailabilityApi": "/api/admin/support/case-managers/{manager_id}/availability/",
+                    "adminApis": {
+                        "createCaseManager": "/api/admin/support/case-managers/",
+                        "createAvailability": "/api/admin/support/case-managers/{manager_id}/availability/"
+                    }
                 },
                 status_code=status.HTTP_404_NOT_FOUND,
             )
 
-        slots = _get_generated_slots(agent, selected_date, call_type)
+        has_availability = AgentAvailability.objects.filter(
+            agent=agent,
+            weekday=selected_date.weekday(),
+            is_active=True,
+        ).exists()
 
-        call_types = [
-            {
-                "value": SupportAppointment.CALL_PHONE,
-                "label": "Phone Call",
-                "description": "Direct call to your number",
-                "isAvailable": SupportAppointment.CALL_PHONE in (agent.available_call_types or []),
-            },
-            {
-                "value": SupportAppointment.CALL_LIVE_CHAT,
-                "label": "Live Chat",
-                "description": "Text chat in-app",
-                "isAvailable": SupportAppointment.CALL_LIVE_CHAT in (agent.available_call_types or []),
-            },
-        ]
+        slots = _get_generated_slots(agent, selected_date, call_type) if has_availability else []
 
         return build_response(
             request,
@@ -1590,7 +1898,20 @@ class SupportBookCallView(APIView):
             message="Book a call data fetched successfully",
             data={
                 "caseManager": _agent_payload(request, agent),
-                "callTypes": call_types,
+                "callTypes": [
+                    {
+                        "value": SupportAppointment.CALL_PHONE,
+                        "label": "Phone Call",
+                        "description": "Direct call to your number",
+                        "isAvailable": SupportAppointment.CALL_PHONE in (agent.available_call_types or []),
+                    },
+                    {
+                        "value": SupportAppointment.CALL_LIVE_CHAT,
+                        "label": "Live Chat",
+                        "description": "Text chat in-app",
+                        "isAvailable": SupportAppointment.CALL_LIVE_CHAT in (agent.available_call_types or []),
+                    },
+                ],
                 "selected": {
                     "managerId": agent.id,
                     "date": selected_date.isoformat(),
@@ -1599,6 +1920,11 @@ class SupportBookCallView(APIView):
                     "callTypeLabel": dict(SupportAppointment.CALL_TYPE_CHOICES).get(call_type),
                 },
                 "slots": slots,
+                "availabilityConfigured": has_availability,
+                "note": {
+                    "enabled": True,
+                    "placeholder": "Tell your advisor what you'd like to discuss..."
+                },
                 "reminder": {
                     "enabled": True,
                     "minutesBefore": 30,
@@ -1606,7 +1932,6 @@ class SupportBookCallView(APIView):
                 },
                 "actions": {
                     "confirmApi": "/api/support/book-call/",
-                    "slotsApi": f"/api/support/book-call/?manager_id={agent.id}&date={selected_date.isoformat()}&call_type={call_type}",
                 },
             },
             status_code=status.HTTP_200_OK,
@@ -1615,7 +1940,11 @@ class SupportBookCallView(APIView):
     def post(self, request):
         manager_id = request.data.get("manager_id") or request.data.get("managerId")
         application_id = request.data.get("application_id") or request.data.get("applicationId")
-        call_type = request.data.get("call_type") or request.data.get("callType") or SupportAppointment.CALL_PHONE
+        call_type = (
+            request.data.get("call_type")
+            or request.data.get("callType")
+            or SupportAppointment.CALL_PHONE
+        )
         date_value = request.data.get("date")
         time_value = request.data.get("time")
         note = request.data.get("note") or ""
@@ -1629,7 +1958,7 @@ class SupportBookCallView(APIView):
                 status_code=status.HTTP_400_BAD_REQUEST,
             )
 
-        agent = self._get_selected_agent(manager_id=manager_id, call_type=call_type)
+        agent = self._get_agent(manager_id=manager_id, call_type=call_type)
 
         if not agent:
             return build_response(
@@ -1660,13 +1989,13 @@ class SupportBookCallView(APIView):
                 status_code=status.HTTP_400_BAD_REQUEST,
             )
 
-        if not _call_type_valid_for_agent(agent, call_type):
+        if call_type not in (agent.available_call_types or []):
             return build_response(
                 request,
                 success=False,
-                message="This case manager does not support the selected call type",
+                message="This case manager does not support the selected call type.",
                 data={
-                    "availableCallTypes": agent.available_call_types,
+                    "availableCallTypes": agent.available_call_types or []
                 },
                 status_code=status.HTTP_400_BAD_REQUEST,
             )
@@ -1689,10 +2018,8 @@ class SupportBookCallView(APIView):
             return build_response(
                 request,
                 success=False,
-                message="Selected time is outside case manager availability",
-                data={
-                    "slots": slots,
-                },
+                message="Selected time is outside case manager availability.",
+                data={"slots": slots},
                 status_code=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -1700,7 +2027,7 @@ class SupportBookCallView(APIView):
             return build_response(
                 request,
                 success=False,
-                message="Selected slot is not available",
+                message="Selected slot is not available.",
                 data={
                     "reason": selected_slot["reason"],
                     "slots": slots,
@@ -1733,7 +2060,6 @@ class SupportBookCallView(APIView):
                 "appointment": _appointment_payload(request, appointment),
                 "actions": {
                     "backToDashboard": True,
-                    "myAppointmentsApi": "/api/support/appointments/my/",
                 },
             },
             status_code=status.HTTP_201_CREATED,
