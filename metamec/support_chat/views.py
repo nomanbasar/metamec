@@ -23,6 +23,14 @@ from django.conf import settings
 
 User = get_user_model()
 
+def _truthy(value):
+    if isinstance(value, bool):
+        return value
+
+    if value is None:
+        return False
+
+    return str(value).strip().lower() in ["true", "1", "yes", "y", "on"]
 
 def _is_admin_user(user):
     if not user or not user.is_authenticated:
@@ -1495,4 +1503,238 @@ class AdminSupportAppointmentStatusView(APIView):
             message="Appointment status updated successfully",
             data=_appointment_payload(request, appointment),
             status_code=status.HTTP_200_OK,
+        )
+    
+
+
+class SupportBookCallView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def _get_selected_agent(self, manager_id=None, call_type=None):
+        queryset = SupportAgent.objects.filter(is_active=True).order_by("sort_order", "name")
+
+        if manager_id:
+            queryset = queryset.filter(id=manager_id)
+
+        if call_type:
+            agents = list(queryset)
+            for agent in agents:
+                if call_type in (agent.available_call_types or []):
+                    return agent
+            return queryset.first()
+
+        return queryset.first()
+
+    def get(self, request):
+        manager_id = request.query_params.get("manager_id") or request.query_params.get("managerId")
+        call_type = request.query_params.get("call_type") or request.query_params.get("callType") or SupportAppointment.CALL_PHONE
+        date_value = request.query_params.get("date")
+
+        if call_type not in [SupportAppointment.CALL_PHONE, SupportAppointment.CALL_LIVE_CHAT]:
+            return build_response(
+                request,
+                success=False,
+                message="Invalid call_type. Use phone_call or live_chat.",
+                data={},
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if date_value:
+            selected_date = _parse_date(date_value)
+        else:
+            selected_date = timezone.localdate() + timedelta(days=1)
+
+        if not selected_date:
+            return build_response(
+                request,
+                success=False,
+                message="Valid date is required. Format: YYYY-MM-DD",
+                data={},
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        agent = self._get_selected_agent(manager_id=manager_id, call_type=call_type)
+
+        if not agent:
+            return build_response(
+                request,
+                success=False,
+                message="No active case manager found. Please create a case manager first.",
+                data={
+                    "adminCreateManagerApi": "/api/admin/support/case-managers/",
+                    "adminCreateAvailabilityApi": "/api/admin/support/case-managers/{manager_id}/availability/",
+                },
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+
+        slots = _get_generated_slots(agent, selected_date, call_type)
+
+        call_types = [
+            {
+                "value": SupportAppointment.CALL_PHONE,
+                "label": "Phone Call",
+                "description": "Direct call to your number",
+                "isAvailable": SupportAppointment.CALL_PHONE in (agent.available_call_types or []),
+            },
+            {
+                "value": SupportAppointment.CALL_LIVE_CHAT,
+                "label": "Live Chat",
+                "description": "Text chat in-app",
+                "isAvailable": SupportAppointment.CALL_LIVE_CHAT in (agent.available_call_types or []),
+            },
+        ]
+
+        return build_response(
+            request,
+            success=True,
+            message="Book a call data fetched successfully",
+            data={
+                "caseManager": _agent_payload(request, agent),
+                "callTypes": call_types,
+                "selected": {
+                    "managerId": agent.id,
+                    "date": selected_date.isoformat(),
+                    "dateLabel": _format_date(selected_date),
+                    "callType": call_type,
+                    "callTypeLabel": dict(SupportAppointment.CALL_TYPE_CHOICES).get(call_type),
+                },
+                "slots": slots,
+                "reminder": {
+                    "enabled": True,
+                    "minutesBefore": 30,
+                    "message": "A reminder will be sent to your registered email 30 minutes before the appointment.",
+                },
+                "actions": {
+                    "confirmApi": "/api/support/book-call/",
+                    "slotsApi": f"/api/support/book-call/?manager_id={agent.id}&date={selected_date.isoformat()}&call_type={call_type}",
+                },
+            },
+            status_code=status.HTTP_200_OK,
+        )
+
+    def post(self, request):
+        manager_id = request.data.get("manager_id") or request.data.get("managerId")
+        application_id = request.data.get("application_id") or request.data.get("applicationId")
+        call_type = request.data.get("call_type") or request.data.get("callType") or SupportAppointment.CALL_PHONE
+        date_value = request.data.get("date")
+        time_value = request.data.get("time")
+        note = request.data.get("note") or ""
+
+        if call_type not in [SupportAppointment.CALL_PHONE, SupportAppointment.CALL_LIVE_CHAT]:
+            return build_response(
+                request,
+                success=False,
+                message="Invalid call_type. Use phone_call or live_chat.",
+                data={},
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        agent = self._get_selected_agent(manager_id=manager_id, call_type=call_type)
+
+        if not agent:
+            return build_response(
+                request,
+                success=False,
+                message="Case manager not found",
+                data={},
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+
+        selected_date = _parse_date(date_value)
+        selected_time = _parse_time(time_value)
+
+        errors = {}
+
+        if not selected_date:
+            errors["date"] = ["Valid date is required. Format: YYYY-MM-DD"]
+
+        if not selected_time:
+            errors["time"] = ["Valid time is required. Format: HH:MM"]
+
+        if errors:
+            return build_response(
+                request,
+                success=False,
+                message="Validation error",
+                data=errors,
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not _call_type_valid_for_agent(agent, call_type):
+            return build_response(
+                request,
+                success=False,
+                message="This case manager does not support the selected call type",
+                data={
+                    "availableCallTypes": agent.available_call_types,
+                },
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        application = _get_application_for_appointment(request.user, application_id)
+
+        if application_id and not application:
+            return build_response(
+                request,
+                success=False,
+                message="Loan application not found",
+                data={},
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+
+        slots = _get_generated_slots(agent, selected_date, call_type)
+        selected_slot = _find_slot(slots, selected_time)
+
+        if not selected_slot:
+            return build_response(
+                request,
+                success=False,
+                message="Selected time is outside case manager availability",
+                data={
+                    "slots": slots,
+                },
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not selected_slot["isAvailable"]:
+            return build_response(
+                request,
+                success=False,
+                message="Selected slot is not available",
+                data={
+                    "reason": selected_slot["reason"],
+                    "slots": slots,
+                },
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        end_time = _parse_time(selected_slot["endsAt"].split("T")[1][:5])
+
+        appointment = SupportAppointment.objects.create(
+            customer=request.user,
+            agent=agent,
+            application=application,
+            call_type=call_type,
+            appointment_date=selected_date,
+            start_time=selected_time,
+            end_time=end_time,
+            status=SupportAppointment.STATUS_SCHEDULED,
+            note=note,
+            reminder_minutes_before=30,
+        )
+
+        return build_response(
+            request,
+            success=True,
+            message="Appointment booked successfully",
+            data={
+                "screenTitle": "Appointment Booked!",
+                "screenSubtitle": f"Your {appointment.get_call_type_display()} with {appointment.agent.name} is confirmed.",
+                "appointment": _appointment_payload(request, appointment),
+                "actions": {
+                    "backToDashboard": True,
+                    "myAppointmentsApi": "/api/support/appointments/my/",
+                },
+            },
+            status_code=status.HTTP_201_CREATED,
         )

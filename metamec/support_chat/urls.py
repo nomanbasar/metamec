@@ -16,6 +16,7 @@ from .views import (
     SupportAppointmentRescheduleView,
     SupportCaseManagerListView,
     SupportCaseManagerSlotsView,
+    SupportBookCallView
 )
 
 
@@ -98,5 +99,10 @@ urlpatterns = [
         "admin/support/appointments/<uuid:appointment_id>/status/",
         AdminSupportAppointmentStatusView.as_view(),
         name="admin_support_appointment_status",
+    ),
+    path(
+        "support/book-call/",
+        SupportBookCallView.as_view(),
+        name="support_book_call",
     ),
 ]
