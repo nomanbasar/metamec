@@ -120,3 +120,181 @@ class ChatMessage(models.Model):
 
     def __str__(self):
         return f"{self.conversation_id} - {self.sender} - {self.message_type}"
+    
+
+
+def default_support_call_types():
+    return ["phone_call", "live_chat"]
+
+
+def support_agent_avatar_path(instance, filename):
+    original_name = os.path.basename(filename)
+    safe_name = original_name.replace(" ", "_")
+    return f"support_agents/{instance.id}/{uuid.uuid4()}_{safe_name}"
+
+
+class SupportAgent(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="support_agent_profile",
+        blank=True,
+        null=True,
+    )
+
+    name = models.CharField(max_length=150)
+    email = models.EmailField(blank=True, null=True)
+    phone_number = models.CharField(max_length=40, blank=True, null=True)
+
+    title = models.CharField(max_length=150, default="Senior Loan Advisor")
+    speciality = models.CharField(max_length=150, default="Homeowner Loans")
+
+    rating = models.DecimalField(max_digits=3, decimal_places=1, default=4.9)
+    reviews_count = models.PositiveIntegerField(default=312)
+
+    avatar = models.FileField(upload_to=support_agent_avatar_path, blank=True, null=True)
+
+    available_call_types = models.JSONField(default=default_support_call_types)
+    is_active = models.BooleanField(default=True)
+
+    sort_order = models.PositiveIntegerField(default=0)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["sort_order", "name"]
+
+    def __str__(self):
+        return self.name
+
+
+class AgentAvailability(models.Model):
+    WEEKDAY_MONDAY = 0
+    WEEKDAY_TUESDAY = 1
+    WEEKDAY_WEDNESDAY = 2
+    WEEKDAY_THURSDAY = 3
+    WEEKDAY_FRIDAY = 4
+    WEEKDAY_SATURDAY = 5
+    WEEKDAY_SUNDAY = 6
+
+    WEEKDAY_CHOICES = (
+        (WEEKDAY_MONDAY, "Monday"),
+        (WEEKDAY_TUESDAY, "Tuesday"),
+        (WEEKDAY_WEDNESDAY, "Wednesday"),
+        (WEEKDAY_THURSDAY, "Thursday"),
+        (WEEKDAY_FRIDAY, "Friday"),
+        (WEEKDAY_SATURDAY, "Saturday"),
+        (WEEKDAY_SUNDAY, "Sunday"),
+    )
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    agent = models.ForeignKey(
+        SupportAgent,
+        on_delete=models.CASCADE,
+        related_name="availability_rules",
+    )
+
+    weekday = models.PositiveSmallIntegerField(choices=WEEKDAY_CHOICES)
+
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+
+    slot_duration_minutes = models.PositiveIntegerField(default=30)
+
+    break_start_time = models.TimeField(blank=True, null=True)
+    break_end_time = models.TimeField(blank=True, null=True)
+
+    is_active = models.BooleanField(default=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["weekday", "start_time"]
+        indexes = [
+            models.Index(fields=["agent", "weekday", "is_active"]),
+        ]
+
+    def __str__(self):
+        return f"{self.agent.name} - {self.get_weekday_display()} {self.start_time}-{self.end_time}"
+
+
+class SupportAppointment(models.Model):
+    CALL_PHONE = "phone_call"
+    CALL_LIVE_CHAT = "live_chat"
+
+    CALL_TYPE_CHOICES = (
+        (CALL_PHONE, "Phone Call"),
+        (CALL_LIVE_CHAT, "Live Chat"),
+    )
+
+    STATUS_SCHEDULED = "scheduled"
+    STATUS_COMPLETED = "completed"
+    STATUS_CANCELLED = "cancelled"
+    STATUS_MISSED = "missed"
+    STATUS_RESCHEDULED = "rescheduled"
+
+    STATUS_CHOICES = (
+        (STATUS_SCHEDULED, "Scheduled"),
+        (STATUS_COMPLETED, "Completed"),
+        (STATUS_CANCELLED, "Cancelled"),
+        (STATUS_MISSED, "Missed"),
+        (STATUS_RESCHEDULED, "Rescheduled"),
+    )
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    customer = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="support_appointments",
+    )
+
+    agent = models.ForeignKey(
+        SupportAgent,
+        on_delete=models.CASCADE,
+        related_name="appointments",
+    )
+
+    application = models.ForeignKey(
+        LoanApplication,
+        on_delete=models.SET_NULL,
+        related_name="support_appointments",
+        blank=True,
+        null=True,
+    )
+
+    call_type = models.CharField(max_length=30, choices=CALL_TYPE_CHOICES)
+
+    appointment_date = models.DateField()
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+
+    status = models.CharField(max_length=30, choices=STATUS_CHOICES, default=STATUS_SCHEDULED)
+
+    note = models.TextField(blank=True, null=True)
+    cancel_reason = models.TextField(blank=True, null=True)
+
+    reminder_minutes_before = models.PositiveIntegerField(default=30)
+
+    cancelled_at = models.DateTimeField(blank=True, null=True)
+    completed_at = models.DateTimeField(blank=True, null=True)
+    rescheduled_at = models.DateTimeField(blank=True, null=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["appointment_date", "start_time"]
+        indexes = [
+            models.Index(fields=["customer", "appointment_date"]),
+            models.Index(fields=["agent", "appointment_date", "start_time"]),
+            models.Index(fields=["status"]),
+        ]
+
+    def __str__(self):
+        return f"{self.customer} - {self.agent.name} - {self.appointment_date} {self.start_time}"

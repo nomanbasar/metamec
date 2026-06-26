@@ -1,11 +1,21 @@
 from django.urls import path
 
 from .views import (
+    AdminSupportAgentAvailabilityView,
+    AdminSupportAppointmentListView,
+    AdminSupportAppointmentStatusView,
+    AdminSupportCaseManagerListCreateView,
     ChatAssignAdminView,
     ChatConversationDetailView,
     ChatConversationListCreateView,
     ChatMarkReadView,
     ChatMessagesView,
+    MySupportAppointmentListView,
+    SupportAppointmentCancelView,
+    SupportAppointmentListCreateView,
+    SupportAppointmentRescheduleView,
+    SupportCaseManagerListView,
+    SupportCaseManagerSlotsView,
 )
 
 
@@ -34,5 +44,59 @@ urlpatterns = [
         "chat/conversations/<uuid:conversation_id>/assign/",
         ChatAssignAdminView.as_view(),
         name="chat_assign_admin",
+    ),
+
+    # Customer Book a Call APIs
+    path(
+        "support/case-managers/",
+        SupportCaseManagerListView.as_view(),
+        name="support_case_managers",
+    ),
+    path(
+        "support/case-managers/<uuid:manager_id>/slots/",
+        SupportCaseManagerSlotsView.as_view(),
+        name="support_case_manager_slots",
+    ),
+    path(
+        "support/appointments/",
+        SupportAppointmentListCreateView.as_view(),
+        name="support_appointment_create",
+    ),
+    path(
+        "support/appointments/my/",
+        MySupportAppointmentListView.as_view(),
+        name="my_support_appointments",
+    ),
+    path(
+        "support/appointments/<uuid:appointment_id>/cancel/",
+        SupportAppointmentCancelView.as_view(),
+        name="support_appointment_cancel",
+    ),
+    path(
+        "support/appointments/<uuid:appointment_id>/reschedule/",
+        SupportAppointmentRescheduleView.as_view(),
+        name="support_appointment_reschedule",
+    ),
+
+    # Admin Book a Call APIs
+    path(
+        "admin/support/case-managers/",
+        AdminSupportCaseManagerListCreateView.as_view(),
+        name="admin_support_case_managers",
+    ),
+    path(
+        "admin/support/case-managers/<uuid:manager_id>/availability/",
+        AdminSupportAgentAvailabilityView.as_view(),
+        name="admin_support_agent_availability",
+    ),
+    path(
+        "admin/support/appointments/",
+        AdminSupportAppointmentListView.as_view(),
+        name="admin_support_appointments",
+    ),
+    path(
+        "admin/support/appointments/<uuid:appointment_id>/status/",
+        AdminSupportAppointmentStatusView.as_view(),
+        name="admin_support_appointment_status",
     ),
 ]
