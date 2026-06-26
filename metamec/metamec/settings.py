@@ -54,6 +54,7 @@ INSTALLED_APPS = [
     'loan_agreements',
     "channels",
     "support_chat",
+    "user_notifications",
 
 
 ]
