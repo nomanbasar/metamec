@@ -55,7 +55,7 @@ INSTALLED_APPS = [
     "channels",
     "support_chat",
     "user_notifications",
-
+    "referrals",
 
 ]
 
@@ -199,3 +199,6 @@ else:
             "BACKEND": "channels.layers.InMemoryChannelLayer",
         },
     }
+
+# REFERRAL_FRONTEND_BASE_URL = "https://loansphere.app/ref"
+REFERRAL_FRONTEND_BASE_URL = "http://127.0.0.1:8011/api/auth/signup/ref"

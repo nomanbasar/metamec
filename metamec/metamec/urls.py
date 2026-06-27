@@ -30,6 +30,7 @@ urlpatterns = [
     path("api/", include("loan_agreements.urls")),
     path("api/", include("support_chat.urls")),
     path("api/", include("user_notifications.urls")),
+    path("api/", include("referrals.urls")),
 ]
 if settings.DEBUG:
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
