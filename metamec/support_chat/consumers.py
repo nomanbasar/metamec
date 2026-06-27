@@ -3,7 +3,7 @@ from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from django.utils import timezone
 
 from .models import ChatConversation, ChatMessage
-
+from user_notifications.events import notify_chat_message
 
 def is_admin_user(user):
     if not user or not user.is_authenticated:
@@ -212,7 +212,7 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         conversation.last_message = message_text[:500]
         conversation.last_message_at = message.created_at
         conversation.save(update_fields=["last_message", "last_message_at", "updated_at"])
-
+        notify_chat_message(message)
         return build_message_payload(message)
 
     @database_sync_to_async

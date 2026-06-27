@@ -10,7 +10,10 @@ from rest_framework.views import APIView
 
 from authentication.utils import build_response
 from loan_applications.models import LoanApplication
-
+from user_notifications.events import (
+    notify_kyc_submitted,
+    notify_kyc_status_changed,
+)
 from .models import CustomerKYC
 from .providers import get_kyc_provider
 
@@ -647,6 +650,8 @@ class CustomerKYCSubmitView(APIView):
         }
         kyc.save()
 
+        notify_kyc_submitted(kyc)
+
         if kyc.application and kyc.application.status == LoanApplication.STATUS_DRAFT:
             kyc.application.status = LoanApplication.STATUS_KYC_REQUIRED
             kyc.application.save(update_fields=["status", "updated_at"])
@@ -838,6 +843,7 @@ class AdminKYCStatusUpdateView(APIView):
                 kyc.application.status = LoanApplication.STATUS_KYC_REQUIRED
                 kyc.application.save(update_fields=["status", "updated_at"])
 
+        notify_kyc_status_changed(kyc, new_status, note)
         return build_response(
             request,
             success=True,
@@ -924,6 +930,7 @@ class OnfidoWebhookView(APIView):
             "webhook": payload,
         }
         kyc.save()
+        notify_kyc_status_changed(kyc, kyc.status)
 
         return build_response(
             request,

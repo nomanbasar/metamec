@@ -10,6 +10,12 @@ from rest_framework.views import APIView
 
 from authentication.utils import build_response
 from loan_applications.models import LoanApplication
+from user_notifications.events import (
+    notify_appointment_booked,
+    notify_appointment_status_changed,
+    notify_chat_message,
+)
+
 
 from .models import (
     AgentAvailability,
@@ -339,6 +345,8 @@ class ChatConversationListCreateView(APIView):
             conversation.last_message = initial_message[:500]
             conversation.last_message_at = message.created_at
             conversation.save(update_fields=["last_message", "last_message_at", "updated_at"])
+            
+            notify_chat_message(message)
 
         return build_response(
             request,
@@ -1810,6 +1818,11 @@ class AdminSupportAppointmentStatusView(APIView):
             appointment.cancel_reason = request.data.get("reason") or appointment.cancel_reason
 
         appointment.save()
+        notify_appointment_status_changed(
+            appointment,
+            new_status,
+            request.data.get("reason") or "",
+        )
 
         return build_response(
             request,
@@ -2049,6 +2062,7 @@ class SupportBookCallView(APIView):
             note=note,
             reminder_minutes_before=30,
         )
+        notify_appointment_booked(appointment)
 
         return build_response(
             request,

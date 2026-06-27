@@ -8,7 +8,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 
 from authentication.utils import build_response
-
+from user_notifications.events import notify_application_submitted
 from .models import LoanApplication
 from .serializers import LoanApplicationSerializer, MyLoanListSerializer
 
@@ -338,6 +338,8 @@ class CustomerLoanApplicationSubmitView(APIView):
         application.submitted_at = timezone.now()
         application.save(update_fields=["status", "current_step", "submitted_at", "updated_at"])
 
+        notify_application_submitted(application)
+        
         data = LoanApplicationSerializer(application).data
 
         data["nextStep"] = "documents"

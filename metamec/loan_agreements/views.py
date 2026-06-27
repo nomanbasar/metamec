@@ -14,6 +14,11 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.views import APIView
 
 from authentication.utils import build_response
+from user_notifications.events import (
+    notify_agreement_signed,
+    notify_co_applicant_invited,
+    notify_co_applicant_responded,
+)
 from loan_applications.models import LoanApplication
 from loan_applications.serializers import LoanApplicationSerializer
 
@@ -508,6 +513,8 @@ class CustomerAgreementSignView(APIView):
             application.status = LoanApplication.STATUS_COMPLETED
             application.save(update_fields=["status", "updated_at"])
 
+        notify_agreement_signed(agreement)
+
         return build_response(
             request,
             success=True,
@@ -644,6 +651,8 @@ class CoApplicantInviteView(APIView):
         except Exception:
             pass
 
+        notify_co_applicant_invited(invite)
+
         return build_response(
             request,
             success=True,
@@ -754,6 +763,7 @@ class CoApplicantInvitationRespondView(APIView):
             message = "Co-applicant invitation declined successfully"
 
         invite.save()
+        notify_co_applicant_responded(invite, action)
 
         return build_response(
             request,

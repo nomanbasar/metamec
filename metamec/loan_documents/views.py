@@ -6,6 +6,11 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 
 from authentication.utils import build_response
+from user_notifications.events import (
+    notify_document_uploaded,
+    notify_documents_completed,
+)
+
 from loan_applications.models import LoanApplication
 
 from .models import LoanApplicationDocument
@@ -313,7 +318,7 @@ class CustomerApplicationDocumentUploadView(APIView):
                 status=LoanApplicationDocument.STATUS_UPLOADED,
             )
             message = "Document uploaded successfully"
-
+        notify_document_uploaded(document, replaced=bool(existing_document))
         return build_response(
             request,
             success=True,
@@ -427,6 +432,7 @@ class CustomerApplicationDocumentsCompleteView(APIView):
             application.status = LoanApplication.STATUS_UNDER_REVIEW
             application.save(update_fields=["status", "updated_at"])
 
+        notify_documents_completed(application)
         response_data = build_documents_response(application)
 
         response_data["successScreen"] = {

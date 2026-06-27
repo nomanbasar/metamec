@@ -13,7 +13,10 @@ from authentication.utils import build_response
 from loan_applications.models import LoanApplication
 from loan_applications.serializers import LoanApplicationSerializer
 from loan_documents.models import LoanApplicationDocument
-
+from user_notifications.events import (
+    notify_application_status_changed,
+    notify_document_status_changed,
+)
 from .models import AdminApplicationNote
 
 
@@ -776,6 +779,7 @@ class AdminDocumentStatusUpdateView(APIView):
                 created_by=request.user,
                 note=note_text,
             )
+        notify_document_status_changed(document, new_status, note_text)
 
         return build_response(
             request,
@@ -850,6 +854,8 @@ class AdminApplicationStatusUpdateView(APIView):
                 created_by=request.user,
                 note=note_text,
             )
+
+        notify_application_status_changed(application, new_status, note_text)
 
         calculated_data = _application_calculated_data(application)
 
