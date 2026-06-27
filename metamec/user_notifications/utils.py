@@ -1,6 +1,7 @@
 import logging
 
 from django.contrib.auth import get_user_model
+from django.db.models import Q
 
 from .models import UserNotification
 
@@ -22,7 +23,7 @@ def create_notification(
 ):
     """
     Safe notification creator.
-    Existing flow break হবে না, কারণ error হলে None return করবে।
+    Notification create fail হলেও existing API break হবে না।
     """
     try:
         if not user:
@@ -56,13 +57,13 @@ def notify_admins(
     object_type=None,
     metadata=None,
 ):
-    """
-    Adminদের notification দিতে চাইলে use করবেন।
-    """
+
     try:
         admins = User.objects.filter(is_active=True).filter(
-            is_staff=True
-        )
+            Q(is_staff=True) |
+            Q(is_superuser=True) |
+            Q(role="admin")
+        ).distinct()
 
         created = []
 
