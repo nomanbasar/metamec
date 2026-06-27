@@ -201,4 +201,4 @@ else:
     }
 
 # REFERRAL_FRONTEND_BASE_URL = "https://loansphere.app/ref"
-REFERRAL_FRONTEND_BASE_URL = "http://127.0.0.1:8011/api/auth/signup/ref"
+REFERRAL_FRONTEND_BASE_URL = "/api/auth/signup/ref"

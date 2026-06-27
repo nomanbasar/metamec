@@ -5,6 +5,11 @@ from .models import User
 
 class SignupSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, min_length=8)
+    referral_code = serializers.CharField(
+        write_only=True,
+        required=False,
+        allow_blank=True,
+    )
 
     class Meta:
         model = User
@@ -16,6 +21,7 @@ class SignupSerializer(serializers.ModelSerializer):
             "password",
             "agreed_terms_business",
             "agreed_privacy_policy",
+            "referral_code",
         )
 
     def validate(self, attrs):
@@ -25,9 +31,18 @@ class SignupSerializer(serializers.ModelSerializer):
 
         return attrs
 
+    # def create(self, validated_data):
+    #     password = validated_data.pop("password")
+    #     return User.objects.create_user(password=password, **validated_data)
+
     def create(self, validated_data):
         password = validated_data.pop("password")
-        return User.objects.create_user(password=password, **validated_data)
+        validated_data.pop("referral_code", None)
+
+        return User.objects.create_user(
+            password=password,
+            **validated_data,
+        )
 
 
 class LoginSerializer(serializers.Serializer):

@@ -22,6 +22,11 @@ from django.conf import settings
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.permissions import IsAuthenticated
 from loan_applications.models import LoanApplication
+from referrals.utils import (
+    create_referral_record,
+    get_referral_profile_by_code,
+    mark_referral_joined_active,
+)
 User = get_user_model()
 
 
@@ -73,8 +78,30 @@ class SignupView(APIView):
                 data=serializer.errors,
                 status_code=status.HTTP_400_BAD_REQUEST,
             )
+        
+        referral_code = request.data.get("referral_code") or request.data.get("referralCode")
+        referral_profile = None
+
+        if referral_code:
+            referral_profile = get_referral_profile_by_code(referral_code)
+
+            if not referral_profile:
+                return build_response(
+                    request,
+                    success=False,
+                    message="Invalid referral code",
+                    data={
+                        "referral_code": ["Invalid referral code."]
+                    },
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                )
 
         user = serializer.save()
+
+        create_referral_record(
+            user=user,
+            referral_profile=referral_profile,
+        )
         create_otp(user, "email_verification")
 
         return build_response(
@@ -157,6 +184,8 @@ class VerifyEmailView(APIView):
 
         user.is_email_verified = True
         user.save()
+
+        mark_referral_joined_active(user)
 
         return build_response(
             request,
