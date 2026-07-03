@@ -202,3 +202,18 @@ else:
 
 # REFERRAL_FRONTEND_BASE_URL = "https://loansphere.app/ref"
 REFERRAL_FRONTEND_BASE_URL = "/api/auth/signup/ref"
+
+
+COMPLIANCE_ASSIST_CLIENT_ID = config("COMPLIANCE_ASSIST_CLIENT_ID", default="")
+COMPLIANCE_ASSIST_CLIENT_SECRET = config("COMPLIANCE_ASSIST_CLIENT_SECRET", default="")
+COMPLIANCE_ASSIST_REQUEST_TYPE = config("COMPLIANCE_ASSIST_REQUEST_TYPE", default="AGP")
+COMPLIANCE_ASSIST_AUTH_URL = config(
+    "COMPLIANCE_ASSIST_AUTH_URL",
+    default="https://auth-u.complianceassist.co.uk/oauth2/token",
+)
+COMPLIANCE_ASSIST_BASE_URL = config(
+    "COMPLIANCE_ASSIST_BASE_URL",
+    default="https://web-u.complianceassist.co.uk/api/v2_0",
+)
+COMPLIANCE_ASSIST_SCOPE = config("COMPLIANCE_ASSIST_SCOPE", default="uat/requests.write")
+COMPLIANCE_ASSIST_TIMEOUT = config("COMPLIANCE_ASSIST_TIMEOUT", default=30, cast=int)
