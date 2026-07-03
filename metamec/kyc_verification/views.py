@@ -638,7 +638,19 @@ class CustomerKYCSubmitView(APIView):
             )
 
         provider = get_kyc_provider()
-        check_response = provider.submit_check(kyc)
+        try:
+            check_response = provider.submit_check(kyc, request.data)
+        except Exception as exc:
+            return build_response(
+                request,
+                success=False,
+                message="KYC provider error",
+                data={
+                    "provider": provider.name,
+                    "error": str(exc),
+                },
+                status_code=status.HTTP_502_BAD_GATEWAY,
+            )
 
         kyc.provider = provider.name
         kyc.provider_check_id = check_response.get("check_id")
