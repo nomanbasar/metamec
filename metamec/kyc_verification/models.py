@@ -41,10 +41,12 @@ class CustomerKYC(models.Model):
 
     PROVIDER_MOCK = "mock"
     PROVIDER_ONFIDO = "onfido"
+    PROVIDER_COMPLIANCE_ASSIST = "complianceassist"
 
     PROVIDER_CHOICES = (
         (PROVIDER_MOCK, "Mock"),
         (PROVIDER_ONFIDO, "Onfido"),
+        (PROVIDER_COMPLIANCE_ASSIST, "ComplianceAssist"),
     )
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
