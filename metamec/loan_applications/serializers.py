@@ -343,8 +343,12 @@ class LoanApplicationSerializer(serializers.ModelSerializer):
         if monthly_debt <= 0:
             return None
 
+        # ratio = (monthly_debt / monthly_income) * Decimal("100")
+        # return ratio.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         ratio = (monthly_debt / monthly_income) * Decimal("100")
+        ratio = max(Decimal("-100"), min(ratio, Decimal("100")))
         return ratio.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        
 
     def validate_currentStep(self, value):
         if value < 1 or value > LoanApplication.TOTAL_STEPS:
