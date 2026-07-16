@@ -214,6 +214,17 @@ COMPLIANCE_ASSIST_AUTH_URL = config(
 COMPLIANCE_ASSIST_BASE_URL = config(
     "COMPLIANCE_ASSIST_BASE_URL",
     default="https://web-u.complianceassist.co.uk/api/v2_0",
+).rstrip("/")
+
+
+COMPLIANCE_ASSIST_WRITE_SCOPE = config(
+    "COMPLIANCE_ASSIST_WRITE_SCOPE",
+    default="uat/requests.write",
+)
+
+COMPLIANCE_ASSIST_READ_SCOPE = config(
+    "COMPLIANCE_ASSIST_READ_SCOPE",
+    default="uat/requests.read",
 )
 COMPLIANCE_ASSIST_SCOPE = config("COMPLIANCE_ASSIST_SCOPE", default="uat/requests.write")
 COMPLIANCE_ASSIST_TIMEOUT = config("COMPLIANCE_ASSIST_TIMEOUT", default=30, cast=int)

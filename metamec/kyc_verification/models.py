@@ -125,8 +125,28 @@ class CustomerKYC(models.Model):
     def has_selfie(self):
         return bool(self.selfie_image)
 
+    # @property
+    # def can_submit(self):
+    #     return bool(
+    #         self.has_id_documents
+    #         and self.has_selfie
+    #         and self.status not in [
+    #             self.STATUS_UNDER_REVIEW,
+    #             self.STATUS_APPROVED,
+    #         ]
+    #     )
+
     @property
     def can_submit(self):
+        if self.provider == self.PROVIDER_COMPLIANCE_ASSIST:
+            return bool(
+                not self.provider_check_id
+                and self.status not in [
+                    self.STATUS_UNDER_REVIEW,
+                    self.STATUS_APPROVED,
+                ]
+            )
+
         return bool(
             self.has_id_documents
             and self.has_selfie
@@ -135,3 +155,7 @@ class CustomerKYC(models.Model):
                 self.STATUS_APPROVED,
             ]
         )
+    
+
+
+
