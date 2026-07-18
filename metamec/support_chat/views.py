@@ -1704,6 +1704,38 @@ class AdminSupportCaseManagerDetailView(APIView):
             status_code=status.HTTP_200_OK,
         )
 
+    # def delete(self, request, manager_id):
+    #     if not _is_admin_user(request.user):
+    #         return build_response(
+    #             request,
+    #             success=False,
+    #             message="Admin permission required",
+    #             data={},
+    #             status_code=status.HTTP_403_FORBIDDEN,
+    #         )
+
+    #     agent = self.get_object(manager_id)
+
+    #     if not agent:
+    #         return build_response(
+    #             request,
+    #             success=False,
+    #             message="Case manager not found",
+    #             data={},
+    #             status_code=status.HTTP_404_NOT_FOUND,
+    #         )
+
+    #     agent.is_active = False
+    #     agent.save(update_fields=["is_active", "updated_at"])
+
+    #     return build_response(
+    #         request,
+    #         success=True,
+    #         message="Case manager disabled successfully",
+    #         data=_agent_payload(request, agent),
+    #         status_code=status.HTTP_200_OK,
+    #     )
+
     def delete(self, request, manager_id):
         if not _is_admin_user(request.user):
             return build_response(
@@ -1726,7 +1758,21 @@ class AdminSupportCaseManagerDetailView(APIView):
             )
 
         agent.is_active = False
-        agent.save(update_fields=["is_active", "updated_at"])
+        agent.save(
+            update_fields=[
+                "is_active",
+                "updated_at",
+            ]
+        )
+
+        if agent.user:
+            agent.user.is_active = False
+            agent.user.save(
+                update_fields=[
+                    "is_active",
+                    "updated_at",
+                ]
+            )
 
         return build_response(
             request,
