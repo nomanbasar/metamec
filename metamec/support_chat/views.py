@@ -7,7 +7,7 @@ from rest_framework import status
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
-
+from django.core.mail import send_mail
 from authentication.utils import build_response
 from loan_applications.models import LoanApplication
 from user_notifications.events import (
@@ -16,6 +16,9 @@ from user_notifications.events import (
     notify_chat_message,
 )
 
+import secrets
+import string
+from django.db import transaction
 
 from .models import (
     AgentAvailability,
@@ -73,6 +76,37 @@ def _is_admin_user(user):
         "administrator",
     ]
 
+def _is_support_staff(user):
+    if not user or not user.is_authenticated:
+        return False
+
+    if str(getattr(user, "role", "")).lower() != "support_staff":
+        return False
+
+    try:
+        return bool(
+            user.support_agent_profile
+            and user.support_agent_profile.is_active
+        )
+    except SupportAgent.DoesNotExist:
+        return False
+
+
+
+def _generate_temporary_password(length=12):
+    alphabet = string.ascii_letters + string.digits + "@#$%"
+
+    while True:
+        password = "".join(secrets.choice(alphabet) for _ in range(length))
+
+        if (
+            any(char.islower() for char in password)
+            and any(char.isupper() for char in password)
+            and any(char.isdigit() for char in password)
+            and any(char in "@#$%" for char in password)
+        ):
+            return password
+
 
 def _to_int(value, default):
     try:
@@ -124,6 +158,7 @@ def _user_payload(user):
         "initials": _user_initials(user),
         "role": getattr(user, "role", None),
         "isAdmin": _is_admin_user(user),
+        "isSupportStaff": _is_support_staff(user),
     }
 
 
@@ -164,8 +199,21 @@ def _message_payload(request, message):
     }
 
 
+# def _unread_count_for_user(conversation, user):
+#     if _is_admin_user(user):
+#         last_read = conversation.admin_last_read_at
+#     else:
+#         last_read = conversation.customer_last_read_at
+
+#     queryset = conversation.messages.exclude(sender=user)
+
+#     if last_read:
+#         queryset = queryset.filter(created_at__gt=last_read)
+
+#     return queryset.count()
+
 def _unread_count_for_user(conversation, user):
-    if _is_admin_user(user):
+    if _is_admin_user(user) or _is_support_staff(user):
         last_read = conversation.admin_last_read_at
     else:
         last_read = conversation.customer_last_read_at
@@ -202,10 +250,25 @@ def _conversation_payload(request, conversation):
     }
 
 
+# def _can_access_conversation(user, conversation):
+#     if _is_admin_user(user):
+#         return True
+
+#     return conversation.customer_id == user.id
+
 def _can_access_conversation(user, conversation):
+    if not user or not user.is_authenticated:
+        return False
+
+    # Main admin can monitor every conversation
     if _is_admin_user(user):
         return True
 
+    # Support staff can access only assigned conversations
+    if _is_support_staff(user):
+        return conversation.admin_id == user.id
+
+    # Customer can access only own conversations
     return conversation.customer_id == user.id
 
 
@@ -1293,6 +1356,238 @@ class AdminSupportCaseManagerListCreateView(APIView):
             data=_agent_payload(request, agent),
             status_code=status.HTTP_201_CREATED,
         )
+
+    def post(self, request):
+        if not _is_admin_user(request.user):
+            return build_response(
+                request,
+                success=False,
+                message="Admin permission required",
+                data={},
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+
+        user_id = request.data.get("user_id") or request.data.get("userId")
+
+        name = str(request.data.get("name") or "").strip()
+        email = str(request.data.get("email") or "").strip().lower()
+
+        if not name:
+            return build_response(
+                request,
+                success=False,
+                message="Name is required",
+                data={
+                    "name": ["Name is required."]
+                },
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not email and not user_id:
+            return build_response(
+                request,
+                success=False,
+                message="Email is required",
+                data={
+                    "email": ["Email is required."]
+                },
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        linked_user = None
+        temporary_password = None
+        credentials_email_sent = False
+
+        try:
+            with transaction.atomic():
+                # Keep old user_id linking support unchanged
+                if user_id:
+                    linked_user = User.objects.filter(
+                        id=user_id,
+                        is_active=True,
+                    ).first()
+
+                    if not linked_user:
+                        return build_response(
+                            request,
+                            success=False,
+                            message="User not found",
+                            data={},
+                            status_code=status.HTTP_404_NOT_FOUND,
+                        )
+
+                    if SupportAgent.objects.filter(user=linked_user).exists():
+                        return build_response(
+                            request,
+                            success=False,
+                            message="This user is already registered as a case manager",
+                            data={
+                                "user_id": [
+                                    "This user already has a case manager profile."
+                                ]
+                            },
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                        )
+
+                    email = email or _user_email(linked_user)
+                    name = name or _user_name(linked_user)
+
+                    linked_user.role = "support_staff"
+                    linked_user.is_email_verified = True
+                    linked_user.save(
+                        update_fields=[
+                            "role",
+                            "is_email_verified",
+                            "updated_at",
+                        ]
+                    )
+
+                else:
+                    if User.objects.filter(email_address__iexact=email).exists():
+                        return build_response(
+                            request,
+                            success=False,
+                            message="A user with this email already exists",
+                            data={
+                                "email": [
+                                    "A user account with this email already exists."
+                                ]
+                            },
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                        )
+
+                    if SupportAgent.objects.filter(email__iexact=email).exists():
+                        return build_response(
+                            request,
+                            success=False,
+                            message="A case manager with this email already exists",
+                            data={
+                                "email": [
+                                    "A case manager with this email already exists."
+                                ]
+                            },
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                        )
+
+                    temporary_password = _generate_temporary_password()
+
+                    account_is_active = _truthy(
+                        request.data.get("is_active", True)
+                    )
+
+                    linked_user = User.objects.create_user(
+                        email_address=email,
+                        password=temporary_password,
+                        full_name=name,
+                        phone_number=(
+                            request.data.get("phone_number")
+                            or request.data.get("phoneNumber")
+                        ),
+                        role="support_staff",
+                        is_active=account_is_active,
+                        is_staff=False,
+                        is_email_verified=True,
+                    )
+
+                agent = SupportAgent.objects.create(
+                    user=linked_user,
+                    name=name,
+                    email=email,
+                    phone_number=(
+                        request.data.get("phone_number")
+                        or request.data.get("phoneNumber")
+                    ),
+                    title=request.data.get("title") or "Loan Advisor",
+                    speciality=request.data.get("speciality") or "",
+                    rating=request.data.get("rating") or 0,
+                    reviews_count=_to_int(
+                        request.data.get("reviews_count")
+                        or request.data.get("reviewsCount"),
+                        0,
+                    ),
+                    available_call_types=_normalize_call_types(
+                        request.data.get("available_call_types")
+                        or request.data.get("availableCallTypes")
+                    ),
+                    is_active=_truthy(
+                        request.data.get("is_active", True)
+                    ),
+                    sort_order=_to_int(
+                        request.data.get("sort_order")
+                        or request.data.get("sortOrder"),
+                        0,
+                    ),
+                )
+
+                avatar = request.FILES.get("avatar")
+
+                if avatar:
+                    agent.avatar = avatar
+                    agent.save(
+                        update_fields=[
+                            "avatar",
+                            "updated_at",
+                        ]
+                    )
+
+                # Email is sent only for a newly created account
+                if temporary_password:
+                    login_url = getattr(
+                        settings,
+                        "FRONTEND_ADMIN_LOGIN_URL",
+                        getattr(
+                            settings,
+                            "SITE_BASE_URL",
+                            "http://127.0.0.1:8011",
+                        ),
+                    )
+
+                    send_mail(
+                        subject="Your Metamec Gold Support Account",
+                        message=(
+                            f"Hello {name},\n\n"
+                            f"Your Metamec Gold support account has been created.\n\n"
+                            f"Login email: {email}\n"
+                            f"Temporary password: {temporary_password}\n"
+                            f"Login URL: {login_url}\n\n"
+                            f"After logging in, please update your profile "
+                            f"from the Settings/Profile section.\n\n"
+                            f"Regards,\n"
+                            f"Metamec Gold Team"
+                        ),
+                        from_email=settings.DEFAULT_FROM_EMAIL,
+                        recipient_list=[email],
+                        fail_silently=False,
+                    )
+
+                    credentials_email_sent = True
+
+        except Exception:
+            return build_response(
+                request,
+                success=False,
+                message="Case manager account could not be created or credentials email could not be sent",
+                data={
+                    "email": [
+                        "Please check the email configuration and try again."
+                    ]
+                },
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        response_data = _agent_payload(request, agent)
+        response_data["userId"] = linked_user.id
+        response_data["role"] = linked_user.role
+        response_data["credentialsEmailSent"] = credentials_email_sent
+
+        return build_response(
+            request,
+            success=True,
+            message="Case manager created and login credentials sent successfully",
+            data=response_data,
+            status_code=status.HTTP_201_CREATED,
+        )
+
 
 
 class AdminSupportCaseManagerDetailView(APIView):
