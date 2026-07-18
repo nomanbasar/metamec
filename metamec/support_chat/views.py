@@ -272,6 +272,153 @@ def _can_access_conversation(user, conversation):
     return conversation.customer_id == user.id
 
 
+# class ChatConversationListCreateView(APIView):
+#     permission_classes = [IsAuthenticated]
+#     parser_classes = [JSONParser, MultiPartParser, FormParser]
+
+#     def get(self, request):
+#         search = request.query_params.get("search", "").strip()
+#         status_filter = request.query_params.get("status", "").strip()
+#         page = _to_int(request.query_params.get("page"), 1)
+#         limit = _to_int(request.query_params.get("limit"), 20)
+
+#         queryset = ChatConversation.objects.select_related(
+#             "customer",
+#             "admin",
+#             "application",
+#             "application__loan_type",
+#         ).all()
+
+#         if not _is_admin_user(request.user):
+#             queryset = queryset.filter(customer=request.user)
+
+#         if search:
+#             queryset = queryset.filter(
+#                 Q(title__icontains=search)
+#                 | Q(customer__full_name__icontains=search)
+#                 | Q(customer__email_address__icontains=search)
+#                 | Q(admin__full_name__icontains=search)
+#                 | Q(admin__email_address__icontains=search)
+#                 | Q(application__application_number__icontains=search)
+#             )
+
+#         if status_filter:
+#             queryset = queryset.filter(status=status_filter)
+
+#         total = queryset.count()
+#         start = (page - 1) * limit
+#         end = start + limit
+
+#         items = [
+#             _conversation_payload(request, conversation)
+#             for conversation in queryset.order_by("-last_message_at", "-created_at")[start:end]
+#         ]
+
+#         summary_queryset = ChatConversation.objects.all()
+
+#         if not _is_admin_user(request.user):
+#             summary_queryset = summary_queryset.filter(customer=request.user)
+
+#         return build_response(
+#             request,
+#             success=True,
+#             message="Chat conversations fetched successfully",
+#             meta=_meta(
+#                 page,
+#                 limit,
+#                 total,
+#                 {
+#                     "search": search,
+#                     "status": status_filter,
+#                 },
+#             ),
+#             data={
+#                 "summary": {
+#                     "total": summary_queryset.count(),
+#                     "open": summary_queryset.filter(status=ChatConversation.STATUS_OPEN).count(),
+#                     "closed": summary_queryset.filter(status=ChatConversation.STATUS_CLOSED).count(),
+#                 },
+#                 "conversations": items,
+#             },
+#             status_code=status.HTTP_200_OK,
+#         )
+
+#     def post(self, request):
+#         application_id = request.data.get("application_id") or request.data.get("applicationId")
+#         title = str(request.data.get("title") or "Live Chat").strip()
+#         initial_message = str(request.data.get("message") or request.data.get("initial_message") or "").strip()
+
+#         application = None
+
+#         if application_id:
+#             application = LoanApplication.objects.filter(id=application_id, user=request.user).first()
+
+#             if not application and not _is_admin_user(request.user):
+#                 return build_response(
+#                     request,
+#                     success=False,
+#                     message="Loan application not found",
+#                     data={},
+#                     status_code=status.HTTP_404_NOT_FOUND,
+#                 )
+
+#         if _is_admin_user(request.user):
+#             customer_id = request.data.get("customer_id") or request.data.get("customerId")
+
+#             if not customer_id:
+#                 return build_response(
+#                     request,
+#                     success=False,
+#                     message="customer_id is required when admin creates a chat",
+#                     data={},
+#                     status_code=status.HTTP_400_BAD_REQUEST,
+#                 )
+
+#             customer = User.objects.filter(id=customer_id, is_active=True).first()
+
+#             if not customer:
+#                 return build_response(
+#                     request,
+#                     success=False,
+#                     message="Customer not found",
+#                     data={},
+#                     status_code=status.HTTP_404_NOT_FOUND,
+#                 )
+
+#             admin = request.user
+
+#         else:
+#             customer = request.user
+#             admin = _get_default_admin()
+
+#         conversation = ChatConversation.objects.create(
+#             customer=customer,
+#             admin=admin,
+#             application=application,
+#             title=title,
+#         )
+
+#         if initial_message:
+#             message = ChatMessage.objects.create(
+#                 conversation=conversation,
+#                 sender=request.user,
+#                 message_type=ChatMessage.MESSAGE_TEXT,
+#                 message=initial_message,
+#             )
+#             conversation.last_message = initial_message[:500]
+#             conversation.last_message_at = message.created_at
+#             conversation.save(update_fields=["last_message", "last_message_at", "updated_at"])
+            
+#             notify_chat_message(message)
+
+#         return build_response(
+#             request,
+#             success=True,
+#             message="Chat conversation created successfully",
+#             data=_conversation_payload(request, conversation),
+#             status_code=status.HTTP_201_CREATED,
+#         )
+
 class ChatConversationListCreateView(APIView):
     permission_classes = [IsAuthenticated]
     parser_classes = [JSONParser, MultiPartParser, FormParser]
@@ -289,7 +436,16 @@ class ChatConversationListCreateView(APIView):
             "application__loan_type",
         ).all()
 
-        if not _is_admin_user(request.user):
+        if _is_admin_user(request.user):
+            # Main admin can see every conversation
+            pass
+
+        elif _is_support_staff(request.user):
+            # Support staff sees only assigned conversations
+            queryset = queryset.filter(admin=request.user)
+
+        else:
+            # Customer sees only own conversations
             queryset = queryset.filter(customer=request.user)
 
         if search:
@@ -311,13 +467,24 @@ class ChatConversationListCreateView(APIView):
 
         items = [
             _conversation_payload(request, conversation)
-            for conversation in queryset.order_by("-last_message_at", "-created_at")[start:end]
+            for conversation in queryset.order_by(
+                "-last_message_at",
+                "-created_at",
+            )[start:end]
         ]
 
         summary_queryset = ChatConversation.objects.all()
 
-        if not _is_admin_user(request.user):
-            summary_queryset = summary_queryset.filter(customer=request.user)
+        if _is_admin_user(request.user):
+            pass
+        elif _is_support_staff(request.user):
+            summary_queryset = summary_queryset.filter(
+                admin=request.user
+            )
+        else:
+            summary_queryset = summary_queryset.filter(
+                customer=request.user
+            )
 
         return build_response(
             request,
@@ -335,8 +502,12 @@ class ChatConversationListCreateView(APIView):
             data={
                 "summary": {
                     "total": summary_queryset.count(),
-                    "open": summary_queryset.filter(status=ChatConversation.STATUS_OPEN).count(),
-                    "closed": summary_queryset.filter(status=ChatConversation.STATUS_CLOSED).count(),
+                    "open": summary_queryset.filter(
+                        status=ChatConversation.STATUS_OPEN
+                    ).count(),
+                    "closed": summary_queryset.filter(
+                        status=ChatConversation.STATUS_CLOSED
+                    ).count(),
                 },
                 "conversations": items,
             },
@@ -344,16 +515,53 @@ class ChatConversationListCreateView(APIView):
         )
 
     def post(self, request):
-        application_id = request.data.get("application_id") or request.data.get("applicationId")
-        title = str(request.data.get("title") or "Live Chat").strip()
-        initial_message = str(request.data.get("message") or request.data.get("initial_message") or "").strip()
+        if _is_support_staff(request.user):
+            return build_response(
+                request,
+                success=False,
+                message="Support staff cannot create a customer conversation",
+                data={},
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+
+        application_id = (
+            request.data.get("application_id")
+            or request.data.get("applicationId")
+        )
+
+        case_manager_id = (
+            request.data.get("case_manager_id")
+            or request.data.get("caseManagerId")
+            or request.data.get("manager_id")
+            or request.data.get("managerId")
+        )
+
+        title = str(
+            request.data.get("title")
+            or "Live Chat"
+        ).strip()
+
+        initial_message = str(
+            request.data.get("message")
+            or request.data.get("initial_message")
+            or ""
+        ).strip()
 
         application = None
 
         if application_id:
-            application = LoanApplication.objects.filter(id=application_id, user=request.user).first()
+            application_queryset = LoanApplication.objects.filter(
+                id=application_id
+            )
 
-            if not application and not _is_admin_user(request.user):
+            if not _is_admin_user(request.user):
+                application_queryset = application_queryset.filter(
+                    user=request.user
+                )
+
+            application = application_queryset.first()
+
+            if not application:
                 return build_response(
                     request,
                     success=False,
@@ -363,7 +571,10 @@ class ChatConversationListCreateView(APIView):
                 )
 
         if _is_admin_user(request.user):
-            customer_id = request.data.get("customer_id") or request.data.get("customerId")
+            customer_id = (
+                request.data.get("customer_id")
+                or request.data.get("customerId")
+            )
 
             if not customer_id:
                 return build_response(
@@ -374,7 +585,11 @@ class ChatConversationListCreateView(APIView):
                     status_code=status.HTTP_400_BAD_REQUEST,
                 )
 
-            customer = User.objects.filter(id=customer_id, is_active=True).first()
+            customer = User.objects.filter(
+                id=customer_id,
+                role="customer",
+                is_active=True,
+            ).first()
 
             if not customer:
                 return build_response(
@@ -385,15 +600,62 @@ class ChatConversationListCreateView(APIView):
                     status_code=status.HTTP_404_NOT_FOUND,
                 )
 
-            admin = request.user
+            assigned_staff = request.user
+
+            if case_manager_id:
+                case_manager = SupportAgent.objects.select_related(
+                    "user"
+                ).filter(
+                    id=case_manager_id,
+                    is_active=True,
+                    user__is_active=True,
+                    user__role="support_staff",
+                ).first()
+
+                if not case_manager or not case_manager.user:
+                    return build_response(
+                        request,
+                        success=False,
+                        message="Active case manager not found",
+                        data={},
+                        status_code=status.HTTP_404_NOT_FOUND,
+                    )
+
+                assigned_staff = case_manager.user
 
         else:
             customer = request.user
-            admin = _get_default_admin()
+
+            if case_manager_id:
+                case_manager = SupportAgent.objects.select_related(
+                    "user"
+                ).filter(
+                    id=case_manager_id,
+                    is_active=True,
+                    user__is_active=True,
+                    user__role="support_staff",
+                    available_call_types__contains=[
+                        SupportAppointment.CALL_LIVE_CHAT
+                    ],
+                ).first()
+
+                if not case_manager or not case_manager.user:
+                    return build_response(
+                        request,
+                        success=False,
+                        message="This case manager is not available for live chat",
+                        data={},
+                        status_code=status.HTTP_404_NOT_FOUND,
+                    )
+
+                assigned_staff = case_manager.user
+            else:
+                # Existing behaviour remains unchanged
+                assigned_staff = _get_default_admin()
 
         conversation = ChatConversation.objects.create(
             customer=customer,
-            admin=admin,
+            admin=assigned_staff,
             application=application,
             title=title,
         )
@@ -405,10 +667,17 @@ class ChatConversationListCreateView(APIView):
                 message_type=ChatMessage.MESSAGE_TEXT,
                 message=initial_message,
             )
+
             conversation.last_message = initial_message[:500]
             conversation.last_message_at = message.created_at
-            conversation.save(update_fields=["last_message", "last_message_at", "updated_at"])
-            
+            conversation.save(
+                update_fields=[
+                    "last_message",
+                    "last_message_at",
+                    "updated_at",
+                ]
+            )
+
             notify_chat_message(message)
 
         return build_response(
@@ -418,6 +687,7 @@ class ChatConversationListCreateView(APIView):
             data=_conversation_payload(request, conversation),
             status_code=status.HTTP_201_CREATED,
         )
+
 
 
 class ChatConversationDetailView(APIView):
