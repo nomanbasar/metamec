@@ -627,6 +627,26 @@ class ChatConversationListCreateView(APIView):
             customer = request.user
 
             if case_manager_id:
+                # case_manager = SupportAgent.objects.select_related(
+                #     "user"
+                # ).filter(
+                #     id=case_manager_id,
+                #     is_active=True,
+                #     user__is_active=True,
+                #     user__role="support_staff",
+                #     available_call_types__contains=[
+                #         SupportAppointment.CALL_LIVE_CHAT
+                #     ],
+                # ).first()
+
+                # if not case_manager or not case_manager.user:
+                #     return build_response(
+                #         request,
+                #         success=False,
+                #         message="This case manager is not available for live chat",
+                #         data={},
+                #         status_code=status.HTTP_404_NOT_FOUND,
+                #     )
                 case_manager = SupportAgent.objects.select_related(
                     "user"
                 ).filter(
@@ -634,12 +654,14 @@ class ChatConversationListCreateView(APIView):
                     is_active=True,
                     user__is_active=True,
                     user__role="support_staff",
-                    available_call_types__contains=[
-                        SupportAppointment.CALL_LIVE_CHAT
-                    ],
                 ).first()
 
-                if not case_manager or not case_manager.user:
+                if (
+                    not case_manager
+                    or not case_manager.user
+                    or SupportAppointment.CALL_LIVE_CHAT
+                    not in (case_manager.available_call_types or [])
+                ):
                     return build_response(
                         request,
                         success=False,
@@ -856,7 +878,8 @@ class ChatMarkReadView(APIView):
 
         now = timezone.now()
 
-        if _is_admin_user(request.user):
+        # if _is_admin_user(request.user):
+        if _is_admin_user(request.user) or _is_support_staff(request.user):
             conversation.admin_last_read_at = now
         else:
             conversation.customer_last_read_at = now
@@ -910,7 +933,12 @@ class ChatAssignAdminView(APIView):
         admin_id = request.data.get("admin_id") or request.data.get("adminId")
 
         if admin_id:
-            admin = User.objects.filter(id=admin_id, is_active=True).first()
+            # admin = User.objects.filter(id=admin_id, is_active=True).first()
+            admin = User.objects.filter(
+                Q(id=admin_id),
+                Q(is_active=True),
+                Q(role="admin") | Q(role="support_staff"),
+            ).first()
 
             if not admin:
                 return build_response(
