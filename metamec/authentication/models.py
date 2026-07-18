@@ -29,6 +29,7 @@ class UserManager(BaseUserManager):
 class User(AbstractBaseUser, PermissionsMixin):
     ROLE_CHOICES = (
         ("customer", "Customer"),
+        ("support_staff", "Support Staff"),
         ("admin", "Admin"),
     )
 
