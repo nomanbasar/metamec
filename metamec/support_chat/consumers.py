@@ -19,13 +19,45 @@ def is_admin_user(user):
     ]
 
 
+def is_support_staff(user):
+    if not user or not user.is_authenticated:
+        return False
+
+    if str(getattr(user, "role", "")).lower() != "support_staff":
+        return False
+
+    try:
+        return bool(
+            user.support_agent_profile
+            and user.support_agent_profile.is_active
+        )
+    except Exception:
+        return False
+
+# def user_payload(user):
+#     return {
+#         "id": str(user.id),
+#         "name": getattr(user, "full_name", None) or getattr(user, "email_address", None),
+#         "email": getattr(user, "email_address", None) or getattr(user, "email", None),
+#         "role": getattr(user, "role", None),
+#         "isAdmin": is_admin_user(user),
+#     }
+
+
 def user_payload(user):
     return {
         "id": str(user.id),
-        "name": getattr(user, "full_name", None) or getattr(user, "email_address", None),
-        "email": getattr(user, "email_address", None) or getattr(user, "email", None),
+        "name": (
+            getattr(user, "full_name", None)
+            or getattr(user, "email_address", None)
+        ),
+        "email": (
+            getattr(user, "email_address", None)
+            or getattr(user, "email", None)
+        ),
         "role": getattr(user, "role", None),
         "isAdmin": is_admin_user(user),
+        "isSupportStaff": is_support_staff(user),
     }
 
 
@@ -173,11 +205,38 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
                 }
             )
 
+    # @database_sync_to_async
+    # def can_access_conversation(self):
+    #     conversation = (
+    #         ChatConversation.objects
+    #         .select_related("customer", "admin")
+    #         .filter(id=self.conversation_id)
+    #         .first()
+    #     )
+
+    #     if not conversation:
+    #         return False
+
+    #     if conversation.customer_id == self.user.id:
+    #         return True
+
+    #     if is_admin_user(self.user):
+    #         if not conversation.admin_id:
+    #             conversation.admin = self.user
+    #             conversation.save(update_fields=["admin", "updated_at"])
+    #         return True
+
+    #     return False
+
     @database_sync_to_async
     def can_access_conversation(self):
         conversation = (
             ChatConversation.objects
-            .select_related("customer", "admin")
+            .select_related(
+                "customer",
+                "admin",
+                "admin__support_agent_profile",
+            )
             .filter(id=self.conversation_id)
             .first()
         )
@@ -191,10 +250,20 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         if is_admin_user(self.user):
             if not conversation.admin_id:
                 conversation.admin = self.user
-                conversation.save(update_fields=["admin", "updated_at"])
+                conversation.save(
+                    update_fields=[
+                        "admin",
+                        "updated_at",
+                    ]
+                )
+
             return True
 
+        if is_support_staff(self.user):
+            return conversation.admin_id == self.user.id
+
         return False
+
 
     @database_sync_to_async
     def create_message(self, message_text):
@@ -221,7 +290,8 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
 
         conversation = ChatConversation.objects.get(id=self.conversation_id)
 
-        if is_admin_user(self.user):
+        # if is_admin_user(self.user):
+        if is_admin_user(self.user) or is_support_staff(self.user):
             conversation.admin_last_read_at = now
         else:
             conversation.customer_last_read_at = now
