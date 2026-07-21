@@ -2717,3 +2717,440 @@ class SupportBookCallView(APIView):
             },
             status_code=status.HTTP_201_CREATED,
         )
+    
+class StaffDashboardView(APIView):
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not _is_support_staff(request.user):
+            return build_response(
+                request,
+                success=False,
+                message="Support staff permission required",
+                data={},
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+
+        agent = SupportAgent.objects.filter(
+            user=request.user,
+            is_active=True,
+        ).first()
+
+        if not agent:
+            return build_response(
+                request,
+                success=False,
+                message="Active support staff profile not found",
+                data={},
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+
+        conversations = ChatConversation.objects.select_related(
+            "customer",
+            "admin",
+            "application",
+            "application__loan_type",
+        ).filter(
+            admin=request.user,
+        )
+
+        total_conversations = conversations.count()
+
+        open_conversations = conversations.filter(
+            status=ChatConversation.STATUS_OPEN,
+        ).count()
+
+        closed_conversations = conversations.filter(
+            status=ChatConversation.STATUS_CLOSED,
+        ).count()
+
+        unread_messages = 0
+
+        for conversation in conversations.only(
+            "id",
+            "admin_last_read_at",
+        ):
+            unread_messages += _unread_count_for_user(
+                conversation,
+                request.user,
+            )
+
+        today = timezone.localdate()
+
+        appointments = SupportAppointment.objects.select_related(
+            "customer",
+            "agent",
+            "application",
+            "application__loan_type",
+        ).filter(
+            agent=agent,
+        )
+
+        today_appointments = appointments.filter(
+            appointment_date=today,
+            status__in=[
+                SupportAppointment.STATUS_SCHEDULED,
+                SupportAppointment.STATUS_RESCHEDULED,
+            ],
+        ).count()
+
+        upcoming_appointments = appointments.filter(
+            appointment_date__gt=today,
+            status__in=[
+                SupportAppointment.STATUS_SCHEDULED,
+                SupportAppointment.STATUS_RESCHEDULED,
+            ],
+        ).count()
+
+        recent_conversations = conversations.order_by(
+            "-last_message_at",
+            "-created_at",
+        )[:5]
+
+        return build_response(
+            request,
+            success=True,
+            message="Staff dashboard fetched successfully",
+            data={
+                "role": "support_staff",
+                "consoleTitle": "Staff Console",
+
+                "permissions": {
+                    "dashboard": True,
+                    "applications": False,
+                    "loanManagement": False,
+                    "users": False,
+                    "messages": True,
+                    "aiInsights": False,
+                    "myProfile": True,
+                },
+
+                "sidebar": [
+                    {
+                        "key": "dashboard",
+                        "label": "Dashboard",
+                        "path": "/admin/dashboard",
+                    },
+                    {
+                        "key": "messages",
+                        "label": "Messages",
+                        "path": "/admin/messages",
+                    },
+                    {
+                        "key": "my_profile",
+                        "label": "My Profile",
+                        "path": "/admin/profile",
+                    },
+                ],
+
+                "staff": {
+                    "user": _user_payload(request.user),
+                    "agent": _agent_payload(request, agent),
+                },
+
+                "summary": {
+                    "assignedConversations": total_conversations,
+                    "openConversations": open_conversations,
+                    "closedConversations": closed_conversations,
+                    "unreadMessages": unread_messages,
+                    "todayAppointments": today_appointments,
+                    "upcomingAppointments": upcoming_appointments,
+                },
+
+                "recentConversations": [
+                    _conversation_payload(
+                        request,
+                        conversation,
+                    )
+                    for conversation in recent_conversations
+                ],
+
+                "allowedApis": {
+                    "dashboard": "/api/staff/dashboard/",
+                    "conversations": "/api/chat/conversations/",
+                    "profile": "/api/staff/profile/",
+                },
+            },
+            status_code=status.HTTP_200_OK,
+        )
+
+
+class StaffProfileView(APIView):
+
+    permission_classes = [IsAuthenticated]
+    parser_classes = [
+        JSONParser,
+        MultiPartParser,
+        FormParser,
+    ]
+
+    def _get_agent(self, user):
+        return SupportAgent.objects.filter(
+            user=user,
+            is_active=True,
+        ).first()
+
+    def _profile_payload(
+        self,
+        request,
+        user,
+        agent,
+    ):
+        return {
+            "id": user.id,
+            "fullName": user.full_name,
+            "emailAddress": user.email_address,
+            "phoneNumber": user.phone_number,
+            "department": user.department,
+            "location": user.location,
+            "role": user.role,
+            "roleLabel": "Support Staff",
+            "isActive": user.is_active,
+            "isEmailVerified": user.is_email_verified,
+            "profileImageUrl": _file_url(
+                request,
+                user.profile_image,
+            ),
+            "agent": _agent_payload(
+                request,
+                agent,
+            ),
+        }
+
+    def get(self, request):
+        if not _is_support_staff(request.user):
+            return build_response(
+                request,
+                success=False,
+                message="Support staff permission required",
+                data={},
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+
+        agent = self._get_agent(
+            request.user,
+        )
+
+        if not agent:
+            return build_response(
+                request,
+                success=False,
+                message="Active support staff profile not found",
+                data={},
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+
+        return build_response(
+            request,
+            success=True,
+            message="Staff profile fetched successfully",
+            data=self._profile_payload(
+                request,
+                request.user,
+                agent,
+            ),
+            status_code=status.HTTP_200_OK,
+        )
+
+    def patch(self, request):
+        if not _is_support_staff(request.user):
+            return build_response(
+                request,
+                success=False,
+                message="Support staff permission required",
+                data={},
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+
+        user = request.user
+
+        agent = self._get_agent(user)
+
+        if not agent:
+            return build_response(
+                request,
+                success=False,
+                message="Active support staff profile not found",
+                data={},
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+
+        full_name = request.data.get(
+            "full_name"
+        )
+
+        if full_name is None:
+            full_name = request.data.get(
+                "fullName"
+            )
+
+        phone_number = request.data.get(
+            "phone_number"
+        )
+
+        if phone_number is None:
+            phone_number = request.data.get(
+                "phoneNumber"
+            )
+
+        department = request.data.get(
+            "department"
+        )
+
+        location = request.data.get(
+            "location"
+        )
+
+        profile_image = (
+            request.FILES.get("profile_image")
+            or request.FILES.get("profileImage")
+            or request.FILES.get("image")
+            or request.FILES.get("avatar")
+        )
+
+        remove_profile_image = _truthy(
+            request.data.get(
+                "remove_profile_image"
+            )
+            or request.data.get(
+                "removeProfileImage"
+            )
+        )
+
+        errors = {}
+
+        if (
+            full_name is not None
+            and not str(full_name).strip()
+        ):
+            errors["full_name"] = [
+                "Full name cannot be empty."
+            ]
+
+        if errors:
+            return build_response(
+                request,
+                success=False,
+                message="Validation error",
+                data=errors,
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user_update_fields = []
+        agent_update_fields = []
+
+        if full_name is not None:
+            clean_name = str(
+                full_name
+            ).strip()
+
+            user.full_name = clean_name
+            agent.name = clean_name
+
+            user_update_fields.append(
+                "full_name"
+            )
+
+            agent_update_fields.append(
+                "name"
+            )
+
+        if phone_number is not None:
+            clean_phone = (
+                str(phone_number).strip()
+                or None
+            )
+
+            user.phone_number = clean_phone
+            agent.phone_number = clean_phone
+
+            user_update_fields.append(
+                "phone_number"
+            )
+
+            agent_update_fields.append(
+                "phone_number"
+            )
+
+        if department is not None:
+            user.department = (
+                str(department).strip()
+                or None
+            )
+
+            user_update_fields.append(
+                "department"
+            )
+
+        if location is not None:
+            user.location = (
+                str(location).strip()
+                or None
+            )
+
+            user_update_fields.append(
+                "location"
+            )
+
+        if remove_profile_image:
+            if user.profile_image:
+                user.profile_image.delete(
+                    save=False
+                )
+
+            user.profile_image = None
+
+            user_update_fields.append(
+                "profile_image"
+            )
+
+        if profile_image:
+            if user.profile_image:
+                user.profile_image.delete(
+                    save=False
+                )
+
+            user.profile_image = profile_image
+
+            user_update_fields.append(
+                "profile_image"
+            )
+
+        if user_update_fields:
+            user_update_fields.append(
+                "updated_at"
+            )
+
+            user.save(
+                update_fields=list(
+                    dict.fromkeys(
+                        user_update_fields
+                    )
+                )
+            )
+
+        if agent_update_fields:
+            agent_update_fields.append(
+                "updated_at"
+            )
+
+            agent.save(
+                update_fields=list(
+                    dict.fromkeys(
+                        agent_update_fields
+                    )
+                )
+            )
+
+        return build_response(
+            request,
+            success=True,
+            message="Staff profile updated successfully",
+            data=self._profile_payload(
+                request,
+                user,
+                agent,
+            ),
+            status_code=status.HTTP_200_OK,
+        )
