@@ -19,7 +19,6 @@ from .views import (
     SupportCaseManagerListView,
     SupportCaseManagerSlotsView,
     SupportBookCallView,
-    StaffDashboardView,
     StaffProfileView,
 )
 
@@ -122,7 +121,6 @@ urlpatterns = [
         name="support_book_call",
     ),
 
-    path("staff/dashboard/", StaffDashboardView.as_view(), name="staff_dashboard"),
 
     path("staff/profile/",StaffProfileView.as_view(), name="staff_profile"),
 ]

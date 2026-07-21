@@ -1658,8 +1658,20 @@ class AdminDashboardView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        if not _is_admin_user(request.user):
+        is_support_staff = (
+            str(getattr(request.user, "role", "")).lower()
+            == "support_staff"
+            and getattr(request.user, "is_active", False)
+        )
+
+        if not (
+            _is_admin_user(request.user)
+            or is_support_staff
+        ):
             return _admin_required_response(request)
+        
+        # if not _is_admin_user(request.user):
+        #     return _admin_required_response(request)
 
         now = timezone.now()
         current_month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
