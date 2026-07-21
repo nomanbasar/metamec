@@ -1990,10 +1990,16 @@ class AdminDashboardView(APIView):
             },
         }
 
+        dashboard_message = (
+            "Staff dashboard fetched successfully"
+            if getattr(request.user, "role", None) == "support_staff"
+            else "Admin dashboard fetched successfully"
+        )
+
         return build_response(
             request,
             success=True,
-            message="Admin dashboard fetched successfully",
+            message=dashboard_message,
             meta=meta,
             data=data,
             status_code=status.HTTP_200_OK,
