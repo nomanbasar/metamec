@@ -298,3 +298,150 @@ class SupportAppointment(models.Model):
 
     def __str__(self):
         return f"{self.customer} - {self.agent.name} - {self.appointment_date} {self.start_time}"
+
+
+
+def chat_template_attachment_path(instance, filename):
+    original_name = os.path.basename(filename)
+    safe_name = original_name.replace(" ", "_")
+    return f"chat_templates/{instance.id}/{uuid.uuid4()}_{safe_name}"
+
+
+class ChatTemplateFolder(models.Model):
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+    )
+
+    name = models.CharField(max_length=255)
+
+    parent = models.ForeignKey(
+        "self",
+        on_delete=models.CASCADE,
+        related_name="subfolders",
+        blank=True,
+        null=True,
+    )
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="created_chat_template_folders",
+        blank=True,
+        null=True,
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self):
+        return self.name
+
+
+class ChatTemplate(models.Model):
+    CATEGORY_MARKETING = "marketing"
+    CATEGORY_UTILITY = "utility"
+
+    CATEGORY_CHOICES = (
+        (CATEGORY_MARKETING, "Marketing"),
+        (CATEGORY_UTILITY, "Utility"),
+    )
+
+    HEADER_HEADLINE = "headline"
+    HEADER_IMAGE = "image"
+    HEADER_VIDEO = "video"
+    HEADER_PDF = "pdf"
+
+    HEADER_TYPE_CHOICES = (
+        (HEADER_HEADLINE, "Headline"),
+        (HEADER_IMAGE, "Image"),
+        (HEADER_VIDEO, "Video"),
+        (HEADER_PDF, "PDF"),
+    )
+
+    STATUS_DRAFT = "draft"
+    STATUS_PENDING_REVIEW = "pending_review"
+
+    STATUS_CHOICES = (
+        (STATUS_DRAFT, "Draft"),
+        (STATUS_PENDING_REVIEW, "Pending Review"),
+    )
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+    )
+
+    name = models.CharField(max_length=512)
+
+    category = models.CharField(
+        max_length=20,
+        choices=CATEGORY_CHOICES,
+    )
+
+    language = models.CharField(max_length=50)
+
+    message = models.TextField(max_length=1024)
+
+    header_type = models.CharField(
+        max_length=20,
+        choices=HEADER_TYPE_CHOICES,
+        blank=True,
+        null=True,
+    )
+
+    header_text = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+    )
+
+    header_file = models.FileField(
+        upload_to=chat_template_attachment_path,
+        blank=True,
+        null=True,
+    )
+
+    footer_text = models.CharField(
+        max_length=60,
+        blank=True,
+        null=True,
+    )
+
+    buttons = models.JSONField(default=list, blank=True)
+
+    folder = models.ForeignKey(
+        ChatTemplateFolder,
+        on_delete=models.SET_NULL,
+        related_name="templates",
+        blank=True,
+        null=True,
+    )
+
+    status = models.CharField(
+        max_length=30,
+        choices=STATUS_CHOICES,
+        default=STATUS_DRAFT,
+    )
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="created_chat_templates",
+        blank=True,
+        null=True,
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self):
+        return self.name 

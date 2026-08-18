@@ -15,7 +15,7 @@ from user_notifications.events import (
     notify_appointment_status_changed,
     notify_chat_message,
 )
-
+import json
 import secrets
 import string
 from django.db import transaction
@@ -26,6 +26,8 @@ from .models import (
     ChatMessage,
     SupportAgent,
     SupportAppointment,
+    ChatTemplateFolder,
+    ChatTemplate,
 )
 from datetime import datetime, timedelta
 from django.conf import settings
@@ -181,7 +183,7 @@ def _file_url(request, file_field):
         return None
 
     try:
-        return request.build_absolute_uri(file_field.url)
+        return file_field.url
     except Exception:
         return None
 
@@ -197,6 +199,97 @@ def _message_payload(request, message):
         "readAt": message.read_at,
         "createdAt": message.created_at,
     }
+
+
+def _can_access_chat_templates(user):
+    return _is_admin_user(user) or _is_support_staff(user)
+
+
+def _template_folder_payload(folder):
+    if not folder:
+        return None
+
+    return {
+        "id": folder.id,
+        "name": folder.name,
+        "parent": (
+            {
+                "id": folder.parent.id,
+                "name": folder.parent.name,
+            }
+            if folder.parent
+            else None
+        ),
+        "templateCount": folder.templates.count(),
+        "subfolderCount": folder.subfolders.count(),
+        "createdBy": _user_payload(folder.created_by),
+        "createdAt": folder.created_at,
+        "updatedAt": folder.updated_at,
+    }
+
+
+def _template_payload(request, template):
+    return {
+        "id": template.id,
+        "name": template.name,
+        "category": template.category,
+        "language": template.language,
+        "message": template.message,
+        "headerType": template.header_type,
+        "headerText": template.header_text,
+        "headerFile": _file_url(request, template.header_file),
+        "footerText": template.footer_text,
+        "buttons": template.buttons,
+        "folder": (
+            {
+                "id": template.folder.id,
+                "name": template.folder.name,
+            }
+            if template.folder
+            else None
+        ),
+        "status": template.status,
+        "createdBy": _user_payload(template.created_by),
+        "createdAt": template.created_at,
+        "updatedAt": template.updated_at,
+    }
+
+
+def _parse_template_buttons(value):
+    if value is None or value == "":
+        return []
+
+    if isinstance(value, list):
+        return value
+
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed
+        except (json.JSONDecodeError, TypeError):
+            return None
+
+    return None
+
+
+def _validate_template_buttons(buttons):
+    if not isinstance(buttons, list):
+        return "Buttons must be a valid list."
+
+    if len(buttons) > 10:
+        return "Maximum 10 buttons are allowed."
+
+    for button in buttons:
+        if not isinstance(button, dict):
+            return "Each button must be an object."
+
+        if not str(button.get("type") or "").strip():
+            return "Each button requires a type."
+
+        if not str(button.get("label") or "").strip():
+            return "Each button requires a label."
+
+    return None
 
 
 # def _unread_count_for_user(conversation, user):
@@ -2995,5 +3088,844 @@ class StaffProfileView(APIView):
                 user,
                 agent,
             ),
+            status_code=status.HTTP_200_OK,
+        )
+
+
+
+class ChatTemplateFolderListCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+    parser_classes = [JSONParser, FormParser, MultiPartParser]
+
+    def get(self, request):
+        if not _can_access_chat_templates(request.user):
+            return build_response(
+                request,
+                success=False,
+                message="You do not have permission to access template folders",
+                data={},
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+
+        folders = (
+            ChatTemplateFolder.objects
+            .select_related("parent", "created_by")
+            .all()
+            .order_by("name")
+        )
+
+        parent_id = request.query_params.get("parent")
+
+        if parent_id:
+            folders = folders.filter(parent_id=parent_id)
+
+        return build_response(
+            request,
+            success=True,
+            message="Template folders fetched successfully",
+            data=[
+                _template_folder_payload(folder)
+                for folder in folders
+            ],
+            status_code=status.HTTP_200_OK,
+        )
+
+    def post(self, request):
+        if not _is_admin_user(request.user):
+            return build_response(
+                request,
+                success=False,
+                message="Admin permission required",
+                data={},
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+
+        name = str(request.data.get("name") or "").strip()
+        parent_id = request.data.get("parent")
+
+        if not name:
+            return build_response(
+                request,
+                success=False,
+                message="Folder name is required",
+                data={
+                    "name": ["Folder name is required."]
+                },
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        parent = None
+
+        if parent_id:
+            parent = ChatTemplateFolder.objects.filter(
+                id=parent_id
+            ).first()
+
+            if not parent:
+                return build_response(
+                    request,
+                    success=False,
+                    message="Parent folder not found",
+                    data={
+                        "parent": ["Invalid parent folder."]
+                    },
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                )
+
+        folder = ChatTemplateFolder.objects.create(
+            name=name,
+            parent=parent,
+            created_by=request.user,
+        )
+
+        return build_response(
+            request,
+            success=True,
+            message="Template folder created successfully",
+            data=_template_folder_payload(folder),
+            status_code=status.HTTP_201_CREATED,
+        )
+
+
+class ChatTemplateFolderDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+    parser_classes = [JSONParser, FormParser, MultiPartParser]
+
+    def get_object(self, folder_id):
+        return (
+            ChatTemplateFolder.objects
+            .select_related("parent", "created_by")
+            .filter(id=folder_id)
+            .first()
+        )
+
+    def get(self, request, folder_id):
+        if not _can_access_chat_templates(request.user):
+            return build_response(
+                request,
+                success=False,
+                message="You do not have permission to access template folders",
+                data={},
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+
+        folder = self.get_object(folder_id)
+
+        if not folder:
+            return build_response(
+                request,
+                success=False,
+                message="Template folder not found",
+                data={},
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+
+        return build_response(
+            request,
+            success=True,
+            message="Template folder fetched successfully",
+            data=_template_folder_payload(folder),
+            status_code=status.HTTP_200_OK,
+        )
+
+    def patch(self, request, folder_id):
+        if not _is_admin_user(request.user):
+            return build_response(
+                request,
+                success=False,
+                message="Admin permission required",
+                data={},
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+
+        folder = self.get_object(folder_id)
+
+        if not folder:
+            return build_response(
+                request,
+                success=False,
+                message="Template folder not found",
+                data={},
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+
+        if "name" in request.data:
+            name = str(request.data.get("name") or "").strip()
+
+            if not name:
+                return build_response(
+                    request,
+                    success=False,
+                    message="Folder name cannot be empty",
+                    data={
+                        "name": ["Folder name cannot be empty."]
+                    },
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                )
+
+            folder.name = name
+
+        if "parent" in request.data:
+            parent_id = request.data.get("parent")
+
+            if parent_id in [None, "", "null"]:
+                folder.parent = None
+
+            else:
+                if str(parent_id) == str(folder.id):
+                    return build_response(
+                        request,
+                        success=False,
+                        message="A folder cannot be moved inside itself",
+                        data={
+                            "parent": [
+                                "A folder cannot be its own parent."
+                            ]
+                        },
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                    )
+
+                parent = ChatTemplateFolder.objects.filter(
+                    id=parent_id
+                ).first()
+
+                if not parent:
+                    return build_response(
+                        request,
+                        success=False,
+                        message="Parent folder not found",
+                        data={
+                            "parent": ["Invalid parent folder."]
+                        },
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                    )
+
+                # Prevent moving folder into one of its own children
+                current = parent
+
+                while current:
+                    if current.id == folder.id:
+                        return build_response(
+                            request,
+                            success=False,
+                            message="Cannot move folder inside its own subfolder",
+                            data={
+                                "parent": [
+                                    "Invalid folder hierarchy."
+                                ]
+                            },
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                        )
+
+                    current = current.parent
+
+                folder.parent = parent
+
+        folder.save()
+
+        return build_response(
+            request,
+            success=True,
+            message="Template folder updated successfully",
+            data=_template_folder_payload(folder),
+            status_code=status.HTTP_200_OK,
+        )
+
+    def delete(self, request, folder_id):
+        if not _is_admin_user(request.user):
+            return build_response(
+                request,
+                success=False,
+                message="Admin permission required",
+                data={},
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+
+        folder = self.get_object(folder_id)
+
+        if not folder:
+            return build_response(
+                request,
+                success=False,
+                message="Template folder not found",
+                data={},
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+
+        if folder.subfolders.exists():
+            return build_response(
+                request,
+                success=False,
+                message="Folder contains subfolders. Move or delete them first.",
+                data={},
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if folder.templates.exists():
+            return build_response(
+                request,
+                success=False,
+                message="Folder contains templates. Move or delete them first.",
+                data={},
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        folder.delete()
+
+        return build_response(
+            request,
+            success=True,
+            message="Template folder deleted successfully",
+            data={},
+            status_code=status.HTTP_200_OK,
+        )
+
+
+class ChatTemplateListCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+    parser_classes = [JSONParser, FormParser, MultiPartParser]
+
+    def get(self, request):
+        if not _can_access_chat_templates(request.user):
+            return build_response(
+                request,
+                success=False,
+                message="You do not have permission to access chat templates",
+                data={},
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+
+        templates = (
+            ChatTemplate.objects
+            .select_related("folder", "created_by")
+            .all()
+            .order_by("name")
+        )
+
+        folder_id = request.query_params.get("folder")
+        category = request.query_params.get("category")
+        template_status = request.query_params.get("status")
+        search = str(
+            request.query_params.get("search") or ""
+        ).strip()
+
+        if folder_id:
+            templates = templates.filter(folder_id=folder_id)
+
+        if category:
+            templates = templates.filter(
+                category=str(category).lower()
+            )
+
+        if template_status:
+            templates = templates.filter(
+                status=template_status
+            )
+
+        if search:
+            templates = templates.filter(
+                Q(name__icontains=search)
+                | Q(message__icontains=search)
+            )
+
+        return build_response(
+            request,
+            success=True,
+            message="Chat templates fetched successfully",
+            data=[
+                _template_payload(request, template)
+                for template in templates
+            ],
+            status_code=status.HTTP_200_OK,
+        )
+
+    def post(self, request):
+        if not _is_admin_user(request.user):
+            return build_response(
+                request,
+                success=False,
+                message="Admin permission required",
+                data={},
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+
+        name = str(request.data.get("name") or "").strip()
+        category = str(
+            request.data.get("category") or ""
+        ).strip().lower()
+        language = str(
+            request.data.get("language") or ""
+        ).strip()
+        message = str(
+            request.data.get("message") or ""
+        ).strip()
+
+        folder_id = request.data.get("folder")
+
+        header_type = str(
+            request.data.get("header_type") or ""
+        ).strip().lower() or None
+
+        header_text = str(
+            request.data.get("header_text") or ""
+        ).strip() or None
+
+        header_file = request.FILES.get("header_file")
+
+        footer_text = str(
+            request.data.get("footer_text") or ""
+        ).strip() or None
+
+        action = str(
+            request.data.get("action") or "draft"
+        ).strip().lower()
+
+        errors = {}
+
+        if not name:
+            errors["name"] = ["Template name is required."]
+
+        allowed_categories = [
+            ChatTemplate.CATEGORY_MARKETING,
+            ChatTemplate.CATEGORY_UTILITY,
+        ]
+
+        if category not in allowed_categories:
+            errors["category"] = [
+                "Use marketing or utility."
+            ]
+
+        if not language:
+            errors["language"] = [
+                "Language is required."
+            ]
+
+        if not message:
+            errors["message"] = [
+                "Message is required."
+            ]
+
+        elif len(message) > 1024:
+            errors["message"] = [
+                "Message cannot exceed 1024 characters."
+            ]
+
+        folder = None
+
+        if folder_id:
+            folder = ChatTemplateFolder.objects.filter(
+                id=folder_id
+            ).first()
+
+            if not folder:
+                errors["folder"] = [
+                    "Invalid folder."
+                ]
+
+        allowed_header_types = [
+            ChatTemplate.HEADER_HEADLINE,
+            ChatTemplate.HEADER_IMAGE,
+            ChatTemplate.HEADER_VIDEO,
+            ChatTemplate.HEADER_PDF,
+        ]
+
+        if header_type and header_type not in allowed_header_types:
+            errors["header_type"] = [
+                "Use headline, image, video or pdf."
+            ]
+
+        if (
+            header_type == ChatTemplate.HEADER_HEADLINE
+            and not header_text
+        ):
+            errors["header_text"] = [
+                "Headline text is required."
+            ]
+
+        if (
+            header_type
+            in [
+                ChatTemplate.HEADER_IMAGE,
+                ChatTemplate.HEADER_VIDEO,
+                ChatTemplate.HEADER_PDF,
+            ]
+            and not header_file
+        ):
+            errors["header_file"] = [
+                "Attachment file is required."
+            ]
+
+        if footer_text and len(footer_text) > 60:
+            errors["footer_text"] = [
+                "Footer cannot exceed 60 characters."
+            ]
+
+        buttons = _parse_template_buttons(
+            request.data.get("buttons", [])
+        )
+
+        button_error = _validate_template_buttons(buttons)
+
+        if button_error:
+            errors["buttons"] = [button_error]
+
+        if action not in [
+            "draft",
+            "submit_for_review",
+        ]:
+            errors["action"] = [
+                "Use draft or submit_for_review."
+            ]
+
+        if errors:
+            return build_response(
+                request,
+                success=False,
+                message="Validation error",
+                data=errors,
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        template_status = (
+            ChatTemplate.STATUS_PENDING_REVIEW
+            if action == "submit_for_review"
+            else ChatTemplate.STATUS_DRAFT
+        )
+
+        template = ChatTemplate.objects.create(
+            name=name,
+            category=category,
+            language=language,
+            message=message,
+            header_type=header_type,
+            header_text=header_text,
+            header_file=header_file,
+            footer_text=footer_text,
+            buttons=buttons,
+            folder=folder,
+            status=template_status,
+            created_by=request.user,
+        )
+
+        return build_response(
+            request,
+            success=True,
+            message="Chat template created successfully",
+            data=_template_payload(request, template),
+            status_code=status.HTTP_201_CREATED,
+        )
+
+
+class ChatTemplateDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+    parser_classes = [JSONParser, FormParser, MultiPartParser]
+
+    def get_object(self, template_id):
+        return (
+            ChatTemplate.objects
+            .select_related("folder", "created_by")
+            .filter(id=template_id)
+            .first()
+        )
+
+    def get(self, request, template_id):
+        if not _can_access_chat_templates(request.user):
+            return build_response(
+                request,
+                success=False,
+                message="You do not have permission to access chat templates",
+                data={},
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+
+        template = self.get_object(template_id)
+
+        if not template:
+            return build_response(
+                request,
+                success=False,
+                message="Chat template not found",
+                data={},
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+
+        return build_response(
+            request,
+            success=True,
+            message="Chat template fetched successfully",
+            data=_template_payload(request, template),
+            status_code=status.HTTP_200_OK,
+        )
+
+    def patch(self, request, template_id):
+        if not _is_admin_user(request.user):
+            return build_response(
+                request,
+                success=False,
+                message="Admin permission required",
+                data={},
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+
+        template = self.get_object(template_id)
+
+        if not template:
+            return build_response(
+                request,
+                success=False,
+                message="Chat template not found",
+                data={},
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+
+        errors = {}
+
+        if "name" in request.data:
+            name = str(
+                request.data.get("name") or ""
+            ).strip()
+
+            if not name:
+                errors["name"] = [
+                    "Template name cannot be empty."
+                ]
+            else:
+                template.name = name
+
+        if "category" in request.data:
+            category = str(
+                request.data.get("category") or ""
+            ).strip().lower()
+
+            if category not in [
+                ChatTemplate.CATEGORY_MARKETING,
+                ChatTemplate.CATEGORY_UTILITY,
+            ]:
+                errors["category"] = [
+                    "Use marketing or utility."
+                ]
+            else:
+                template.category = category
+
+        if "language" in request.data:
+            language = str(
+                request.data.get("language") or ""
+            ).strip()
+
+            if not language:
+                errors["language"] = [
+                    "Language cannot be empty."
+                ]
+            else:
+                template.language = language
+
+        if "message" in request.data:
+            message = str(
+                request.data.get("message") or ""
+            ).strip()
+
+            if not message:
+                errors["message"] = [
+                    "Message cannot be empty."
+                ]
+
+            elif len(message) > 1024:
+                errors["message"] = [
+                    "Message cannot exceed 1024 characters."
+                ]
+
+            else:
+                template.message = message
+
+        if "folder" in request.data:
+            folder_id = request.data.get("folder")
+
+            if folder_id in [None, "", "null"]:
+                template.folder = None
+
+            else:
+                folder = ChatTemplateFolder.objects.filter(
+                    id=folder_id
+                ).first()
+
+                if not folder:
+                    errors["folder"] = [
+                        "Invalid folder."
+                    ]
+                else:
+                    template.folder = folder
+
+        if "header_type" in request.data:
+            header_type = str(
+                request.data.get("header_type") or ""
+            ).strip().lower()
+
+            if not header_type:
+                template.header_type = None
+                template.header_text = None
+
+                if template.header_file:
+                    template.header_file.delete(save=False)
+
+                template.header_file = None
+
+            elif header_type not in [
+                ChatTemplate.HEADER_HEADLINE,
+                ChatTemplate.HEADER_IMAGE,
+                ChatTemplate.HEADER_VIDEO,
+                ChatTemplate.HEADER_PDF,
+            ]:
+                errors["header_type"] = [
+                    "Use headline, image, video or pdf."
+                ]
+
+            else:
+                template.header_type = header_type
+
+        if "header_text" in request.data:
+            header_text = str(
+                request.data.get("header_text") or ""
+            ).strip()
+
+            template.header_text = header_text or None
+
+        new_header_file = request.FILES.get("header_file")
+
+        if new_header_file:
+            if template.header_file:
+                template.header_file.delete(save=False)
+
+            template.header_file = new_header_file
+
+        remove_header_file = _truthy(
+            request.data.get("remove_header_file", False)
+        )
+
+        if remove_header_file:
+            if template.header_file:
+                template.header_file.delete(save=False)
+
+            template.header_file = None
+
+        if "footer_text" in request.data:
+            footer_text = str(
+                request.data.get("footer_text") or ""
+            ).strip()
+
+            if len(footer_text) > 60:
+                errors["footer_text"] = [
+                    "Footer cannot exceed 60 characters."
+                ]
+            else:
+                template.footer_text = footer_text or None
+
+        if "buttons" in request.data:
+            buttons = _parse_template_buttons(
+                request.data.get("buttons")
+            )
+
+            button_error = _validate_template_buttons(
+                buttons
+            )
+
+            if button_error:
+                errors["buttons"] = [button_error]
+            else:
+                template.buttons = buttons
+
+        if "action" in request.data:
+            action = str(
+                request.data.get("action") or ""
+            ).strip().lower()
+
+            if action == "draft":
+                template.status = (
+                    ChatTemplate.STATUS_DRAFT
+                )
+
+            elif action == "submit_for_review":
+                template.status = (
+                    ChatTemplate.STATUS_PENDING_REVIEW
+                )
+
+            else:
+                errors["action"] = [
+                    "Use draft or submit_for_review."
+                ]
+
+        # Final header validation after all patch values applied
+        if (
+            template.header_type
+            == ChatTemplate.HEADER_HEADLINE
+            and not template.header_text
+        ):
+            errors["header_text"] = [
+                "Headline text is required."
+            ]
+
+        if (
+            template.header_type
+            in [
+                ChatTemplate.HEADER_IMAGE,
+                ChatTemplate.HEADER_VIDEO,
+                ChatTemplate.HEADER_PDF,
+            ]
+            and not template.header_file
+            and not new_header_file
+        ):
+            errors["header_file"] = [
+                "Attachment file is required."
+            ]
+
+        if errors:
+            return build_response(
+                request,
+                success=False,
+                message="Validation error",
+                data=errors,
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        template.save()
+
+        return build_response(
+            request,
+            success=True,
+            message="Chat template updated successfully",
+            data=_template_payload(request, template),
+            status_code=status.HTTP_200_OK,
+        )
+
+    def delete(self, request, template_id):
+        if not _is_admin_user(request.user):
+            return build_response(
+                request,
+                success=False,
+                message="Admin permission required",
+                data={},
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+
+        template = self.get_object(template_id)
+
+        if not template:
+            return build_response(
+                request,
+                success=False,
+                message="Chat template not found",
+                data={},
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+
+        if template.header_file:
+            template.header_file.delete(save=False)
+
+        template.delete()
+
+        return build_response(
+            request,
+            success=True,
+            message="Chat template deleted successfully",
+            data={},
             status_code=status.HTTP_200_OK,
         )

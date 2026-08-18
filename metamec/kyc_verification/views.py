@@ -99,7 +99,7 @@ def _file_url(request, file_field):
         return None
 
     try:
-        return request.build_absolute_uri(file_field.url)
+        return file_field.url
     except Exception:
         return None
 

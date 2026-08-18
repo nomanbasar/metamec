@@ -6,6 +6,8 @@ from .models import (
     ChatMessage,
     SupportAgent,
     SupportAppointment,
+    ChatTemplateFolder,
+    ChatTemplate,
 )
 
 @admin.register(ChatConversation)
@@ -115,4 +117,129 @@ class SupportAppointmentAdmin(admin.ModelAdmin):
         "cancelled_at",
         "completed_at",
         "rescheduled_at",
+    )
+
+
+@admin.register(ChatTemplateFolder)
+class ChatTemplateFolderAdmin(admin.ModelAdmin):
+    list_display = (
+        "name",
+        "parent",
+        "created_by",
+        "created_at",
+        "updated_at",
+    )
+
+    list_filter = (
+        "created_at",
+        "updated_at",
+    )
+
+    search_fields = (
+        "name",
+        "created_by__email",
+    )
+
+    readonly_fields = (
+        "id",
+        "created_at",
+        "updated_at",
+    )
+
+    ordering = ("name",)
+
+    raw_id_fields = (
+        "created_by",
+    )
+
+
+@admin.register(ChatTemplate)
+class ChatTemplateAdmin(admin.ModelAdmin):
+    list_display = (
+        "name",
+        "category",
+        "language",
+        "folder",
+        "status",
+        "created_by",
+        "created_at",
+    )
+
+    list_filter = (
+        "category",
+        "language",
+        "status",
+        "created_at",
+    )
+
+    search_fields = (
+        "name",
+        "message",
+        "footer_text",
+        "created_by__email",
+    )
+
+    readonly_fields = (
+        "id",
+        "created_at",
+        "updated_at",
+    )
+
+    ordering = ("name",)
+
+    raw_id_fields = (
+        "created_by",
+    )
+
+    fieldsets = (
+        (
+            "Template Information",
+            {
+                "fields": (
+                    "id",
+                    "name",
+                    "category",
+                    "language",
+                    "folder",
+                    "status",
+                )
+            },
+        ),
+        (
+            "Message",
+            {
+                "fields": (
+                    "message",
+                    "footer_text",
+                )
+            },
+        ),
+        (
+            "Header / Attachment",
+            {
+                "fields": (
+                    "header_type",
+                    "header_text",
+                    "header_file",
+                )
+            },
+        ),
+        (
+            "Buttons",
+            {
+                "fields": (
+                    "buttons",
+                )
+            },
+        ),
+        (
+            "System Information",
+            {
+                "fields": (
+                    "created_by",
+                    "created_at",
+                    "updated_at",
+                )
+            },
+        ),
     )

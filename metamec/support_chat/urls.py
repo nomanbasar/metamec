@@ -20,6 +20,10 @@ from .views import (
     SupportCaseManagerSlotsView,
     SupportBookCallView,
     StaffProfileView,
+    ChatTemplateFolderListCreateView,
+    ChatTemplateFolderDetailView,
+    ChatTemplateListCreateView,
+    ChatTemplateDetailView,
 )
 
 
@@ -122,5 +126,28 @@ urlpatterns = [
     ),
 
 
-    path("staff/profile/",StaffProfileView.as_view(), name="staff_profile"),
+        # Chat Template Folder APIs
+    path(
+        "chat/template-folders/",
+        ChatTemplateFolderListCreateView.as_view(),
+        name="chat_template_folder_list_create",
+    ),
+    path(
+        "chat/template-folders/<uuid:folder_id>/",
+        ChatTemplateFolderDetailView.as_view(),
+        name="chat_template_folder_detail",
+    ),
+
+    # Chat Template APIs
+    path(
+        "chat/templates/",
+        ChatTemplateListCreateView.as_view(),
+        name="chat_template_list_create",
+    ),
+    path(
+        "chat/templates/<uuid:template_id>/",
+        ChatTemplateDetailView.as_view(),
+        name="chat_template_detail",
+    ),
+
 ]
