@@ -3115,9 +3115,19 @@ class ChatTemplateFolderListCreateView(APIView):
         )
 
         parent_id = request.query_params.get("parent")
+        search = str(
+            request.query_params.get("search") or ""
+        ).strip()
 
         if parent_id:
-            folders = folders.filter(parent_id=parent_id)
+            folders = folders.filter(
+                parent_id=parent_id
+            )
+
+        if search:
+            folders = folders.filter(
+                name__icontains=search
+            )
 
         return build_response(
             request,
@@ -3129,6 +3139,8 @@ class ChatTemplateFolderListCreateView(APIView):
             ],
             status_code=status.HTTP_200_OK,
         )
+
+
 
     def post(self, request):
         if not _is_admin_user(request.user):
