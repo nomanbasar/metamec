@@ -237,3 +237,63 @@ COMPLIANCE_ASSIST_READ_SCOPE = config(
 )
 COMPLIANCE_ASSIST_SCOPE = config("COMPLIANCE_ASSIST_SCOPE", default="uat/requests.write")
 COMPLIANCE_ASSIST_TIMEOUT = config("COMPLIANCE_ASSIST_TIMEOUT", default=30, cast=int)
+
+
+
+# =========================================================
+# AFTER HOURS AI CHAT
+# =========================================================
+
+AI_CHAT_ENABLED = config(
+    "AI_CHAT_ENABLED",
+    default=True,
+    cast=bool,
+)
+
+AI_CHAT_TIMEZONE = config(
+    "AI_CHAT_TIMEZONE",
+    default="Europe/London",
+)
+
+AI_CHAT_OFFICE_START = config(
+    "AI_CHAT_OFFICE_START",
+    default="09:00",
+)
+
+AI_CHAT_OFFICE_END = config(
+    "AI_CHAT_OFFICE_END",
+    default="17:00",
+)
+
+AI_CHAT_WORKDAYS = config(
+    "AI_CHAT_WORKDAYS",
+    default="0,1,2,3,4",
+)
+
+AI_CHAT_USER_EMAIL = config(
+    "AI_CHAT_USER_EMAIL",
+    default="ai-assistant@dragonfinance.local",
+)
+
+AI_CHAT_USER_NAME = config(
+    "AI_CHAT_USER_NAME",
+    default="Dragon Finance AI Assistant",
+)
+
+AI_CHAT_HISTORY_LIMIT = config(
+    "AI_CHAT_HISTORY_LIMIT",
+    default=12,
+    cast=int,
+)
+
+AI_CHAT_FORCE_AFTER_HOURS = config(
+    "AI_CHAT_FORCE_AFTER_HOURS",
+    default=False,
+    cast=bool,
+)
+
+AI_CHAT_FORCE_OFFICE_HOURS = config(
+    "AI_CHAT_FORCE_OFFICE_HOURS",
+    default=False,
+    cast=bool,
+)

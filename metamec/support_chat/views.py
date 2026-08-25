@@ -29,6 +29,11 @@ from .models import (
     ChatTemplateFolder,
     ChatTemplate,
 )
+
+from .ai_chat_service import (
+    is_ai_user,
+    maybe_generate_ai_reply,
+)
 from datetime import datetime, timedelta
 from django.conf import settings
 
@@ -161,6 +166,7 @@ def _user_payload(user):
         "role": getattr(user, "role", None),
         "isAdmin": _is_admin_user(user),
         "isSupportStaff": _is_support_staff(user),
+        "isAI": is_ai_user(user),
     }
 
 
@@ -795,6 +801,15 @@ class ChatConversationListCreateView(APIView):
 
             notify_chat_message(message)
 
+            maybe_generate_ai_reply(
+                conversation=conversation,
+                sender=request.user,
+                message_text=initial_message,
+                current_message_id=message.id,
+                has_attachment=False,
+                broadcast=True,
+            )
+
         return build_response(
             request,
             success=True,
@@ -935,6 +950,15 @@ class ChatMessagesView(APIView):
         conversation.last_message = message_text[:500] if message_text else "Attachment"
         conversation.last_message_at = message.created_at
         conversation.save(update_fields=["last_message", "last_message_at", "updated_at"])
+
+        maybe_generate_ai_reply(
+            conversation=conversation,
+            sender=request.user,
+            message_text=message_text,
+            current_message_id=message.id,
+            has_attachment=bool(attachment),
+            broadcast=True,
+        )
 
         return build_response(
             request,

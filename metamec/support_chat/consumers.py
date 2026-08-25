@@ -5,6 +5,11 @@ from django.utils import timezone
 from .models import ChatConversation, ChatMessage
 from user_notifications.events import notify_chat_message
 
+from .ai_chat_service import (
+    is_ai_user,
+    maybe_generate_ai_reply,
+)
+
 def is_admin_user(user):
     if not user or not user.is_authenticated:
         return False
@@ -58,6 +63,7 @@ def user_payload(user):
         "role": getattr(user, "role", None),
         "isAdmin": is_admin_user(user),
         "isSupportStaff": is_support_staff(user),
+        "isAI": is_ai_user(user),
     }
 
 
@@ -135,6 +141,20 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
                     "clientMessageId": client_message_id,
                 },
             )
+
+            ai_message_data = await self.create_ai_reply(
+                customer_message_id=message_data["id"],
+                message_text=message_text,
+            )
+
+            if ai_message_data:
+                await self.channel_layer.group_send(
+                    self.group_name,
+                    {
+                        "type": "chat.message",
+                        "message": ai_message_data,
+                    },
+                )
 
         elif action == "typing":
             await self.channel_layer.group_send(
@@ -283,6 +303,43 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         conversation.save(update_fields=["last_message", "last_message_at", "updated_at"])
         notify_chat_message(message)
         return build_message_payload(message)
+
+
+    @database_sync_to_async
+    def create_ai_reply(
+        self,
+        customer_message_id,
+        message_text,
+    ):
+        conversation = (
+            ChatConversation.objects
+            .select_related(
+                "customer",
+                "admin",
+            )
+            .get(
+                id=self.conversation_id
+            )
+        )
+
+        ai_message = maybe_generate_ai_reply(
+            conversation=conversation,
+            sender=self.user,
+            message_text=message_text,
+            current_message_id=customer_message_id,
+            has_attachment=False,
+
+            # WebSocket consumer itself will broadcast it.
+            # This avoids duplicate AI messages.
+            broadcast=False,
+        )
+
+        if not ai_message:
+            return None
+
+        return build_message_payload(
+            ai_message
+        )
 
     @database_sync_to_async
     def mark_messages_read(self):
