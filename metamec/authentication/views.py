@@ -10,6 +10,7 @@ from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.db import transaction
+from django.db.models import F
 from .utils import build_response
 from .models import OTP, PasswordReset
 from .serializers import SignupSerializer, LoginSerializer
@@ -339,6 +340,16 @@ class LoginView(APIView):
                 "updated_at",
             ]
         )
+
+        User.objects.filter(pk=user.pk).update(
+            login_count=F("login_count") + 1
+        )
+
+        user.refresh_from_db(
+            fields=["login_count"]
+        )
+
+
         # JWT token generate
         refresh = RefreshToken.for_user(user)
 
@@ -355,6 +366,7 @@ class LoginView(APIView):
                     "role": user.role,
                     "is_email_verified": user.is_email_verified,
                     "is_admin": user.is_staff or user.is_superuser,
+                    "loginCount": user.login_count,
                 },
                 "tokens": {
                     "accessToken": str(refresh.access_token),
@@ -771,6 +783,7 @@ def build_me_response(request, user):
         "full_name": user.full_name,
         "email_address": user.email_address,
         "phone_number": user.phone_number,
+        "loginCount": user.login_count,
         "profile_image": profile_image_data["profile_image"],
         "profile_image_path": profile_image_data["profile_image_path"],
         "profile_image_url": profile_image_data["profile_image_url"],

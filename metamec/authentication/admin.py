@@ -12,6 +12,7 @@ class UserAdmin(BaseUserAdmin):
         "full_name",
         "phone_number",
         "role",
+        "login_count",
         "is_email_verified",
         "is_staff",
         "is_active",

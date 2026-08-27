@@ -46,6 +46,8 @@ class User(AbstractBaseUser, PermissionsMixin):
     last_login_browser = models.CharField(max_length=120, blank=True, null=True)
     last_login_os = models.CharField(max_length=120, blank=True, null=True)
 
+    login_count = models.PositiveIntegerField(default=0)
+
     password = models.CharField(max_length=255)
 
     agreed_terms_business = models.BooleanField(default=False)

@@ -1,7 +1,7 @@
 import math
 
 from django.contrib.auth import get_user_model
-from django.db.models import Count, Q
+from django.db.models import Count, Q, OuterRef, Subquery
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
@@ -522,73 +522,299 @@ class ChatConversationListCreateView(APIView):
     permission_classes = [IsAuthenticated]
     parser_classes = [JSONParser, MultiPartParser, FormParser]
 
-    def get(self, request):
-        search = request.query_params.get("search", "").strip()
-        status_filter = request.query_params.get("status", "").strip()
-        page = _to_int(request.query_params.get("page"), 1)
-        limit = _to_int(request.query_params.get("limit"), 20)
+    # def get(self, request):
+    #     search = request.query_params.get("search", "").strip()
+    #     status_filter = request.query_params.get("status", "").strip()
+    #     page = _to_int(request.query_params.get("page"), 1)
+    #     limit = _to_int(request.query_params.get("limit"), 20)
 
-        queryset = ChatConversation.objects.select_related(
-            "customer",
-            "admin",
-            "application",
-            "application__loan_type",
-        ).all()
+    #     queryset = ChatConversation.objects.select_related(
+    #         "customer",
+    #         "admin",
+    #         "application",
+    #         "application__loan_type",
+    #     ).all()
+
+    #     if _is_admin_user(request.user):
+    #         # Main admin can see every conversation
+    #         pass
+
+    #     elif _is_support_staff(request.user):
+    #         # Support staff sees only assigned conversations
+    #         queryset = queryset.filter(admin=request.user)
+
+    #     else:
+    #         # Customer sees only own conversations
+    #         queryset = queryset.filter(customer=request.user)
+
+    #     if search:
+    #         queryset = queryset.filter(
+    #             Q(title__icontains=search)
+    #             | Q(customer__full_name__icontains=search)
+    #             | Q(customer__email_address__icontains=search)
+    #             | Q(admin__full_name__icontains=search)
+    #             | Q(admin__email_address__icontains=search)
+    #             | Q(application__application_number__icontains=search)
+    #         )
+
+    #     if status_filter:
+    #         queryset = queryset.filter(status=status_filter)
+
+    #     total = queryset.count()
+    #     start = (page - 1) * limit
+    #     end = start + limit
+
+    #     items = [
+    #         _conversation_payload(request, conversation)
+    #         for conversation in queryset.order_by(
+    #             "-last_message_at",
+    #             "-created_at",
+    #         )[start:end]
+    #     ]
+
+    #     summary_queryset = ChatConversation.objects.all()
+
+    #     if _is_admin_user(request.user):
+    #         pass
+    #     elif _is_support_staff(request.user):
+    #         summary_queryset = summary_queryset.filter(
+    #             admin=request.user
+    #         )
+    #     else:
+    #         summary_queryset = summary_queryset.filter(
+    #             customer=request.user
+    #         )
+
+    #     return build_response(
+    #         request,
+    #         success=True,
+    #         message="Chat conversations fetched successfully",
+    #         meta=_meta(
+    #             page,
+    #             limit,
+    #             total,
+    #             {
+    #                 "search": search,
+    #                 "status": status_filter,
+    #             },
+    #         ),
+    #         data={
+    #             "summary": {
+    #                 "total": summary_queryset.count(),
+    #                 "open": summary_queryset.filter(
+    #                     status=ChatConversation.STATUS_OPEN
+    #                 ).count(),
+    #                 "closed": summary_queryset.filter(
+    #                     status=ChatConversation.STATUS_CLOSED
+    #                 ).count(),
+    #             },
+    #             "conversations": items,
+    #         },
+    #         status_code=status.HTTP_200_OK,
+    #     )
+
+    def get(self, request):
+        search = request.query_params.get(
+            "search",
+            "",
+        ).strip()
+
+        status_filter = request.query_params.get(
+            "status",
+            "",
+        ).strip()
+
+        page = _to_int(
+            request.query_params.get("page"),
+            1,
+        )
+
+        limit = _to_int(
+            request.query_params.get("limit"),
+            20,
+        )
+
+        queryset = (
+            ChatConversation.objects
+            .select_related(
+                "customer",
+                "admin",
+                "application",
+                "application__loan_type",
+            )
+            .all()
+        )
+
+        # -------------------------------------------------
+        # Existing permission logic
+        # -------------------------------------------------
 
         if _is_admin_user(request.user):
-            # Main admin can see every conversation
+            # Main admin sees all conversations
             pass
 
         elif _is_support_staff(request.user):
-            # Support staff sees only assigned conversations
-            queryset = queryset.filter(admin=request.user)
+            # Support staff sees assigned conversations only
+            queryset = queryset.filter(
+                admin=request.user
+            )
 
         else:
-            # Customer sees only own conversations
-            queryset = queryset.filter(customer=request.user)
+            # Customer still sees all of own conversations.
+            queryset = queryset.filter(
+                customer=request.user
+            )
+
+        # -------------------------------------------------
+        # Existing search
+        # -------------------------------------------------
 
         if search:
             queryset = queryset.filter(
                 Q(title__icontains=search)
-                | Q(customer__full_name__icontains=search)
-                | Q(customer__email_address__icontains=search)
-                | Q(admin__full_name__icontains=search)
-                | Q(admin__email_address__icontains=search)
-                | Q(application__application_number__icontains=search)
+                | Q(
+                    customer__full_name__icontains=search
+                )
+                | Q(
+                    customer__email_address__icontains=search
+                )
+                | Q(
+                    admin__full_name__icontains=search
+                )
+                | Q(
+                    admin__email_address__icontains=search
+                )
+                | Q(
+                    application__application_number__icontains=search
+                )
             )
 
+        # -------------------------------------------------
+        # Existing status filter
+        # -------------------------------------------------
+
         if status_filter:
-            queryset = queryset.filter(status=status_filter)
+            queryset = queryset.filter(
+                status=status_filter
+            )
+
+        # -------------------------------------------------
+        # Admin / support inbox:
+        # show only latest conversation per customer.
+        #
+        # IMPORTANT:
+        # Nothing is deleted or merged.
+        # Old conversations remain in database.
+        # -------------------------------------------------
+
+        if (
+            _is_admin_user(request.user)
+            or _is_support_staff(request.user)
+        ):
+            latest_conversation = (
+                queryset
+                .filter(
+                    customer_id=OuterRef(
+                        "customer_id"
+                    )
+                )
+                .order_by(
+                    "-last_message_at",
+                    "-created_at",
+                )
+                .values("id")[:1]
+            )
+
+            queryset = queryset.filter(
+                id=Subquery(
+                    latest_conversation
+                )
+            )
+
+        # -------------------------------------------------
+        # Ordering + pagination
+        # -------------------------------------------------
+
+        queryset = queryset.order_by(
+            "-last_message_at",
+            "-created_at",
+        )
 
         total = queryset.count()
+
         start = (page - 1) * limit
         end = start + limit
 
         items = [
-            _conversation_payload(request, conversation)
-            for conversation in queryset.order_by(
-                "-last_message_at",
-                "-created_at",
-            )[start:end]
+            _conversation_payload(
+                request,
+                conversation,
+            )
+            for conversation in queryset[
+                start:end
+            ]
         ]
 
-        summary_queryset = ChatConversation.objects.all()
+        # -------------------------------------------------
+        # Summary
+        # -------------------------------------------------
+
+        summary_queryset = (
+            ChatConversation.objects
+            .all()
+        )
 
         if _is_admin_user(request.user):
             pass
+
         elif _is_support_staff(request.user):
-            summary_queryset = summary_queryset.filter(
-                admin=request.user
+            summary_queryset = (
+                summary_queryset.filter(
+                    admin=request.user
+                )
             )
+
         else:
-            summary_queryset = summary_queryset.filter(
-                customer=request.user
+            summary_queryset = (
+                summary_queryset.filter(
+                    customer=request.user
+                )
+            )
+
+        # Admin/support summary should also count
+        # one latest conversation per customer.
+        if (
+            _is_admin_user(request.user)
+            or _is_support_staff(request.user)
+        ):
+            latest_summary_conversation = (
+                summary_queryset
+                .filter(
+                    customer_id=OuterRef(
+                        "customer_id"
+                    )
+                )
+                .order_by(
+                    "-last_message_at",
+                    "-created_at",
+                )
+                .values("id")[:1]
+            )
+
+            summary_queryset = (
+                summary_queryset.filter(
+                    id=Subquery(
+                        latest_summary_conversation
+                    )
+                )
             )
 
         return build_response(
             request,
             success=True,
-            message="Chat conversations fetched successfully",
+            message=(
+                "Chat conversations fetched successfully"
+            ),
             meta=_meta(
                 page,
                 limit,
@@ -600,18 +826,31 @@ class ChatConversationListCreateView(APIView):
             ),
             data={
                 "summary": {
-                    "total": summary_queryset.count(),
-                    "open": summary_queryset.filter(
-                        status=ChatConversation.STATUS_OPEN
-                    ).count(),
-                    "closed": summary_queryset.filter(
-                        status=ChatConversation.STATUS_CLOSED
-                    ).count(),
+                    "total": (
+                        summary_queryset.count()
+                    ),
+                    "open": (
+                        summary_queryset.filter(
+                            status=(
+                                ChatConversation
+                                .STATUS_OPEN
+                            )
+                        ).count()
+                    ),
+                    "closed": (
+                        summary_queryset.filter(
+                            status=(
+                                ChatConversation
+                                .STATUS_CLOSED
+                            )
+                        ).count()
+                    ),
                 },
                 "conversations": items,
             },
             status_code=status.HTTP_200_OK,
         )
+
 
     def post(self, request):
         if _is_support_staff(request.user):

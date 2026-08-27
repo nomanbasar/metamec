@@ -918,11 +918,28 @@ def _build_kyc_response(request, kyc):
                     .STATUS_APPROVED,
                 ]
             ),
+            # "canSubmit": bool(
+            #     not kyc.provider_check_id
+            #     and kyc.status
+            #     != CustomerKYC.STATUS_APPROVED
+            # ),
             "canSubmit": bool(
-                not kyc.provider_check_id
+                (
+                    not kyc.provider_check_id
+                    or kyc.status
+                    == CustomerKYC.STATUS_REJECTED
+                )
                 and kyc.status
                 != CustomerKYC.STATUS_APPROVED
             ),
+
+            "canRetry": bool(
+                is_complianceassist
+                and kyc.status
+                == CustomerKYC.STATUS_REJECTED
+            ),
+
+
             "canOpenVerification": bool(
                 is_complianceassist
                 and verification_url
@@ -1385,21 +1402,66 @@ class CustomerKYCSubmitView(APIView):
             )
 
     
+        # if kyc.provider_check_id:
+        #     return build_response(
+        #         request,
+        #         success=True,
+        #         message=(
+        #             "KYC request already exists. "
+        #             "Continue using the existing "
+        #             "verification URL."
+        #         ),
+        #         data=_build_kyc_response(
+        #             request,
+        #             kyc,
+        #         ),
+        #         status_code=status.HTTP_200_OK,
+        #     )
+
         if kyc.provider_check_id:
-            return build_response(
-                request,
-                success=True,
-                message=(
-                    "KYC request already exists. "
-                    "Continue using the existing "
-                    "verification URL."
-                ),
-                data=_build_kyc_response(
-                    request,
-                    kyc,
-                ),
-                status_code=status.HTTP_200_OK,
+            verification_url = (
+                _get_provider_verification_url(kyc)
             )
+
+            # ComplianceAssist KYC failed/rejected:
+            # keep the old attempt for history and
+            # create a fresh KYC record for retry.
+            if (
+                is_complianceassist
+                and kyc.status
+                == CustomerKYC.STATUS_REJECTED
+            ):
+                kyc = CustomerKYC.objects.create(
+                    user=request.user,
+                    application=application,
+                    provider=provider.name,
+                )
+
+            else:
+                if verification_url:
+                    existing_message = (
+                        "KYC request already exists. "
+                        "Continue using the existing "
+                        "verification URL."
+                    )
+                else:
+                    existing_message = (
+                        "KYC request already exists. "
+                        "Verification is being processed. "
+                        "Please synchronize the provider "
+                        "status."
+                    )
+
+                return build_response(
+                    request,
+                    success=True,
+                    message=existing_message,
+                    data=_build_kyc_response(
+                        request,
+                        kyc,
+                    ),
+                    status_code=status.HTTP_200_OK,
+                )
 
         kyc.provider = provider.name
         kyc.save(
