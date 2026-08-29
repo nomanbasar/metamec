@@ -353,6 +353,7 @@ class LoginView(APIView):
         # JWT token generate
         refresh = RefreshToken.for_user(user)
 
+        loan_info = _get_active_loan_info(user)
         return build_response(
             request,
             success=True,
@@ -367,6 +368,9 @@ class LoginView(APIView):
                     "is_email_verified": user.is_email_verified,
                     "is_admin": user.is_staff or user.is_superuser,
                     "loginCount": user.login_count,
+                    "loanRunning": loan_info["loanRunning"],
+                    "activeLoanCount": loan_info["activeLoanCount"],
+                    "activeLoanId": loan_info["activeLoanId"],
                 },
                 "tokens": {
                     "accessToken": str(refresh.access_token),
@@ -745,8 +749,46 @@ def format_datetime(value):
         return None
     return timezone.localtime(value).strftime("%b %d, %Y, %I:%M %p")
 
+def _get_active_loan_info(user):
+    if not user or not user.is_authenticated:
+        return {
+            "loanRunning": False,
+            "activeLoanCount": 0,
+            "activeLoanId": None,
+        }
+
+    # Loan restriction business rule:
+    # rejected/completed applications are final.
+    # Everything else is considered active/running.
+    active_loans = (
+        LoanApplication.objects
+        .filter(user=user)
+        .exclude(
+            status__in=[
+                LoanApplication.STATUS_REJECTED,
+                LoanApplication.STATUS_COMPLETED,
+            ]
+        )
+        .order_by("-created_at")
+    )
+
+    active_count = active_loans.count()
+
+    active_loan = active_loans.first()
+
+    return {
+        "loanRunning": active_count > 0,
+        "activeLoanCount": active_count,
+        "activeLoanId": (
+            str(active_loan.id)
+            if active_loan
+            else None
+        ),
+    }
+
 
 def build_me_response(request, user):
+    loan_info = _get_active_loan_info(user)
     now = timezone.now()
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
@@ -784,6 +826,10 @@ def build_me_response(request, user):
         "email_address": user.email_address,
         "phone_number": user.phone_number,
         "loginCount": user.login_count,
+        "loanRunning": loan_info["loanRunning"],
+        "activeLoanCount": loan_info["activeLoanCount"],
+        "activeLoanId": loan_info["activeLoanId"],
+
         "profile_image": profile_image_data["profile_image"],
         "profile_image_path": profile_image_data["profile_image_path"],
         "profile_image_url": profile_image_data["profile_image_url"],
