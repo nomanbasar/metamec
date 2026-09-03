@@ -260,9 +260,29 @@ AI_CHAT_OFFICE_START = config(
     default="09:00",
 )
 
-AI_CHAT_OFFICE_END = config(
-    "AI_CHAT_OFFICE_END",
-    default="17:00",
+AI_CHAT_OFFICE_END_MON = config(
+    "AI_CHAT_OFFICE_END_MON",
+    default="18:00",
+)
+
+AI_CHAT_OFFICE_END_TUE = config(
+    "AI_CHAT_OFFICE_END_TUE",
+    default="18:00",
+)
+
+AI_CHAT_OFFICE_END_WED = config(
+    "AI_CHAT_OFFICE_END_WED",
+    default="18:00",
+)
+
+AI_CHAT_OFFICE_END_THU = config(
+    "AI_CHAT_OFFICE_END_THU",
+    default="18:00",
+)
+
+AI_CHAT_OFFICE_END_FRI = config(
+    "AI_CHAT_OFFICE_END_FRI",
+    default="16:00",
 )
 
 AI_CHAT_WORKDAYS = config(

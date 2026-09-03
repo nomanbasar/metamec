@@ -17,6 +17,10 @@ from .models import ChatConversation, ChatMessage
 logger = logging.getLogger(__name__)
 User = get_user_model()
 
+AFTER_HOURS_NOTICE_MESSAGE = (
+    "Our office is currently closed, during this time our AI assistant, "
+    "Aiden will answer any questions you have."
+)
 
 _engine = None
 _engine_lock = Lock()
@@ -70,11 +74,102 @@ def _get_workdays():
     return days or {0, 1, 2, 3, 4}
 
 
+# def is_after_hours():
+#     """
+#     Monday = 0
+#     Tuesday = 1
+#     ...
+#     Sunday = 6
+#     """
+
+#     if getattr(
+#         settings,
+#         "AI_CHAT_FORCE_AFTER_HOURS",
+#         False,
+#     ):
+#         return True
+
+#     if getattr(
+#         settings,
+#         "AI_CHAT_FORCE_OFFICE_HOURS",
+#         False,
+#     ):
+#         return False
+
+#     timezone_name = getattr(
+#         settings,
+#         "AI_CHAT_TIMEZONE",
+#         "Europe/London",
+#     )
+
+#     try:
+#         current_datetime = timezone.now().astimezone(
+#             ZoneInfo(timezone_name)
+#         )
+#     except Exception:
+#         logger.exception(
+#             "Invalid AI_CHAT_TIMEZONE: %s",
+#             timezone_name,
+#         )
+#         return False
+
+#     if current_datetime.weekday() not in _get_workdays():
+#         return True
+
+#     office_start = _parse_time(
+#         getattr(
+#             settings,
+#             "AI_CHAT_OFFICE_START",
+#             "09:00",
+#         ),
+#         "09:00",
+#     )
+
+#     office_end = _parse_time(
+#         getattr(
+#             settings,
+#             "AI_CHAT_OFFICE_END",
+#             "17:00",
+#         ),
+#         "17:00",
+#     )
+
+#     current_time = current_datetime.time().replace(
+#         tzinfo=None
+#     )
+
+#     if office_start <= office_end:
+#         office_is_open = (
+#             office_start
+#             <= current_time
+#             < office_end
+#         )
+#     else:
+#         office_is_open = (
+#             current_time >= office_start
+#             or current_time < office_end
+#         )
+
+#     return not office_is_open
+
 def is_after_hours():
     """
+    Office hours in Europe/London:
+
+    Monday    09:00 - 18:00
+    Tuesday   09:00 - 18:00
+    Wednesday 09:00 - 18:00
+    Thursday  09:00 - 18:00
+    Friday    09:00 - 16:00
+
+    Saturday/Sunday = after hours.
+
     Monday = 0
     Tuesday = 1
-    ...
+    Wednesday = 2
+    Thursday = 3
+    Friday = 4
+    Saturday = 5
     Sunday = 6
     """
 
@@ -109,7 +204,10 @@ def is_after_hours():
         )
         return False
 
-    if current_datetime.weekday() not in _get_workdays():
+    weekday = current_datetime.weekday()
+
+    # Weekend / non-working day
+    if weekday not in _get_workdays():
         return True
 
     office_start = _parse_time(
@@ -121,13 +219,34 @@ def is_after_hours():
         "09:00",
     )
 
+    office_end_settings = {
+        0: "AI_CHAT_OFFICE_END_MON",
+        1: "AI_CHAT_OFFICE_END_TUE",
+        2: "AI_CHAT_OFFICE_END_WED",
+        3: "AI_CHAT_OFFICE_END_THU",
+        4: "AI_CHAT_OFFICE_END_FRI",
+    }
+
+    office_end_defaults = {
+        0: "18:00",
+        1: "18:00",
+        2: "18:00",
+        3: "18:00",
+        4: "16:00",
+    }
+
+    office_end_setting = office_end_settings.get(weekday)
+
+    if not office_end_setting:
+        return True
+
     office_end = _parse_time(
         getattr(
             settings,
-            "AI_CHAT_OFFICE_END",
-            "17:00",
+            office_end_setting,
+            office_end_defaults[weekday],
         ),
-        "17:00",
+        office_end_defaults[weekday],
     )
 
     current_time = current_datetime.time().replace(
@@ -238,6 +357,7 @@ def _build_chat_history(
         )
         .exclude(message__isnull=True)
         .exclude(message="")
+        .exclude(message=AFTER_HOURS_NOTICE_MESSAGE)
     )
 
     if current_message_id:
@@ -415,6 +535,197 @@ def broadcast_ai_message(message):
         },
     )
 
+def _after_hours_notice_already_sent(conversation):
+    """
+    Returns True when the fixed after-hours notice has already
+    been sent in this conversation during the current after-hours
+    period.
+
+    In FORCE_AFTER_HOURS testing mode, the notice is sent only
+    once per conversation.
+    """
+
+    if not conversation:
+        return True
+
+    # During manual/Postman testing:
+    # one notice per conversation.
+    if getattr(
+        settings,
+        "AI_CHAT_FORCE_AFTER_HOURS",
+        False,
+    ):
+        return ChatMessage.objects.filter(
+            conversation=conversation,
+            message=AFTER_HOURS_NOTICE_MESSAGE,
+        ).exists()
+
+    timezone_name = getattr(
+        settings,
+        "AI_CHAT_TIMEZONE",
+        "Europe/London",
+    )
+
+    try:
+        current_datetime = timezone.now().astimezone(
+            ZoneInfo(timezone_name)
+        )
+    except Exception:
+        logger.exception(
+            "Invalid AI_CHAT_TIMEZONE: %s",
+            timezone_name,
+        )
+        return True
+
+    weekday = current_datetime.weekday()
+
+    office_end_settings = {
+        0: "AI_CHAT_OFFICE_END_MON",
+        1: "AI_CHAT_OFFICE_END_TUE",
+        2: "AI_CHAT_OFFICE_END_WED",
+        3: "AI_CHAT_OFFICE_END_THU",
+        4: "AI_CHAT_OFFICE_END_FRI",
+    }
+
+    office_end_defaults = {
+        0: "18:00",
+        1: "18:00",
+        2: "18:00",
+        3: "18:00",
+        4: "16:00",
+    }
+
+    period_start = None
+
+    # Normal working day after closing time.
+    if weekday in _get_workdays():
+        setting_name = office_end_settings.get(weekday)
+
+        if setting_name:
+            office_end = _parse_time(
+                getattr(
+                    settings,
+                    setting_name,
+                    office_end_defaults[weekday],
+                ),
+                office_end_defaults[weekday],
+            )
+
+            current_time = current_datetime.time().replace(
+                tzinfo=None
+            )
+
+            if current_time >= office_end:
+                period_start = current_datetime.replace(
+                    hour=office_end.hour,
+                    minute=office_end.minute,
+                    second=0,
+                    microsecond=0,
+                )
+
+    # Before opening time or weekend:
+    # find the last working day's closing time.
+    if period_start is None:
+        from datetime import timedelta
+
+        for days_back in range(1, 8):
+            previous_date = (
+                current_datetime.date()
+                - timedelta(days=days_back)
+            )
+
+            previous_weekday = previous_date.weekday()
+
+            if previous_weekday not in _get_workdays():
+                continue
+
+            setting_name = office_end_settings.get(
+                previous_weekday
+            )
+
+            if not setting_name:
+                continue
+
+            office_end = _parse_time(
+                getattr(
+                    settings,
+                    setting_name,
+                    office_end_defaults[
+                        previous_weekday
+                    ],
+                ),
+                office_end_defaults[
+                    previous_weekday
+                ],
+            )
+
+            period_start = current_datetime.replace(
+                year=previous_date.year,
+                month=previous_date.month,
+                day=previous_date.day,
+                hour=office_end.hour,
+                minute=office_end.minute,
+                second=0,
+                microsecond=0,
+            )
+
+            break
+
+    if period_start is None:
+        return False
+
+    return ChatMessage.objects.filter(
+        conversation=conversation,
+        message=AFTER_HOURS_NOTICE_MESSAGE,
+        created_at__gte=period_start,
+    ).exists()
+
+
+def _create_after_hours_notice(
+    conversation,
+    broadcast=True,
+):
+    """
+    Create the fixed office-closed message once before
+    the first AI answer of the current after-hours period.
+    """
+
+    if _after_hours_notice_already_sent(
+        conversation
+    ):
+        return None
+
+    ai_user = _get_ai_user()
+
+    notice_message = ChatMessage.objects.create(
+        conversation=conversation,
+        sender=ai_user,
+        message_type=ChatMessage.MESSAGE_TEXT,
+        message=AFTER_HOURS_NOTICE_MESSAGE,
+    )
+
+    conversation.last_message = (
+        AFTER_HOURS_NOTICE_MESSAGE[:500]
+    )
+    conversation.last_message_at = (
+        notice_message.created_at
+    )
+
+    conversation.save(
+        update_fields=[
+            "last_message",
+            "last_message_at",
+            "updated_at",
+        ]
+    )
+
+    if broadcast:
+        broadcast_ai_message(
+            notice_message
+        )
+
+    return notice_message
+
 
 def maybe_generate_ai_reply(
     conversation,
@@ -440,6 +751,14 @@ def maybe_generate_ai_reply(
         return None
 
     try:
+        notice_message = _create_after_hours_notice(
+            conversation=conversation,
+            broadcast=broadcast,
+        )
+        if notice_message and not broadcast:
+            broadcast_ai_message(
+                notice_message
+            )
         engine = _get_engine()
 
         history = _build_chat_history(
