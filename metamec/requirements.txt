@@ -46,6 +46,7 @@ pillow==12.2.0
 propcache==0.5.4
 psycopg==3.3.4
 psycopg-binary==3.3.4
+psycopg2-binary==2.9.13
 pyasn1==0.6.4
 pyasn1_modules==0.4.2
 pycparser==3.0
