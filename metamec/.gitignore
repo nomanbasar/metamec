@@ -81,3 +81,10 @@ node_modules/
 *.key
 
 chroma_db/
+
+
+staticfiles/
+.env
+env/
+__pycache__/
+*.pyc
