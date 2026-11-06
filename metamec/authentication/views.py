@@ -45,9 +45,9 @@ def create_otp(user, otp_type):
     )
 
     send_mail(
-        subject="LoanSphere Verification Code",
+        subject="Dragon Finance Verification Code",
         message=f"Your verification code is: {otp.otp_code}",
-        from_email="noreply@loansphere.com",
+        from_email=settings.DEFAULT_FROM_EMAIL,
         recipient_list=[user.email_address],
         fail_silently=False,
     )
